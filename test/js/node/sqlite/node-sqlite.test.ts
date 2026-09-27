@@ -1,12 +1,11 @@
 import { heapStats } from "bun:jsc";
 import { describe, expect, test } from "bun:test";
-import { bunEnv, bunExe, isLinux, isWindows, tempDir } from "harness";
+import { bunEnv, bunExe, isLinux, isMacOS, isMusl, isWindows, tempDir } from "harness";
 import { existsSync, readdirSync, readlinkSync, rmSync, statSync } from "node:fs";
 import { builtinModules, isBuiltin } from "node:module";
 import path from "node:path";
 import { DatabaseSync, Session, StatementSync, backup, constants } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { isMacOS, isMusl } from "harness";
 
 // On macOS bun dlopens the system libsqlite3.dylib, which Apple builds
 // without SQLITE_ENABLE_SESSION. createSession()/applyChangeset() throw
