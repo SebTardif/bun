@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep macOS subprocess exit handling non-blocking when kqueue reports ESRCH before a terminal child can be reaped.
+
 - Preserve file-URL entry identity and literal `?` paths in `Bun.ModuleGraph`, and avoid retaining GC-backed string views across macro transpilation.
 - Prepare daily or manually requested upstream merges as frozen draft PRs, preserving fork history and stopping visibly on conflicts or permission failures.
 - Deliver `node:http` write callbacks when uncorking introduces transport backpressure, and retain error callbacks when the peer resets before the buffered write drains.
