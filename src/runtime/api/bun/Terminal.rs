@@ -1262,6 +1262,15 @@ fn create_pty_windows(cols: u16, rows: u16) -> Result<PtyResult, CreatePtyError>
         hpcon = Some(pc);
     }
 
+    // A process started with Ctrl+C ignored (CREATE_NEW_PROCESS_GROUP, or a
+    // service/SSH session) passes that flag to every child it creates, so the
+    // CTRL_C_EVENT ConPTY raises for \x03 input would never reach the shell.
+    // Restore default Ctrl+C handling before the child is spawned, as node-pty
+    // does. There is no per-child form: this also changes Bun's own inheritable
+    // attribute, so a Bun that ignored console Ctrl+C handles it from now on, and
+    // later children inherit that, exactly as with node-pty.
+    let _ = windows::SetConsoleCtrlHandler(None, windows::FALSE);
+
     // ConPTY duplicated the client handles internally; close our copies.
     // SAFETY: in_client/out_client are valid open HANDLEs.
     unsafe {
