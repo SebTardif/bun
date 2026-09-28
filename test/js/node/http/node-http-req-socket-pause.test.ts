@@ -2,6 +2,7 @@
  * All tests in this file should also run in Node.js 26+.
  * The Upgrade-body case follows Node 26 semantics.
  */
+import { describe, expect, it } from "bun:test";
 import assert from "node:assert/strict";
 import { once, type EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
@@ -10,9 +11,8 @@ import { createServer as createSecureServer, type Server as SecureServer } from 
 import type { AddressInfo, Socket } from "node:net";
 import { connect } from "node:net";
 import { join } from "node:path";
-import { describe, expect, it } from "bun:test";
-import { connect as connectSecure } from "node:tls";
 import type { Duplex } from "node:stream";
+import { connect as connectSecure } from "node:tls";
 
 it("req.socket emits 'pause' once an unread request body fills the IncomingMessage buffer", async () => {
   // Node's test-http-no-read-no-dump: a handler that never reads the body sees
