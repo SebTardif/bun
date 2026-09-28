@@ -2,6 +2,7 @@ import { dlopen, FFIType } from "bun:ffi";
 import { describe, expect, test } from "bun:test";
 import { bunEnv, bunExe, isMusl, isWindows, tempDir } from "harness";
 import fs from "node:fs";
+import { join } from "node:path";
 
 // Cross-platform Bun.Terminal + Bun.spawn integration tests that don't rely
 // on POSIX-only behaviour (termios echo, SIGWINCH, cat/echo binaries). The
@@ -610,6 +611,200 @@ describe("Bun.Terminal subprocess integration", () => {
     expect(output).toContain("PROBE-CLEAN");
     expect(output).not.toContain("PROBE-CORRUPTED");
     expect(exitCode).toBe(0);
+  });
+});
+
+describe("Bun.Terminal output flow control", () => {
+  test.concurrent("pause inside data applies backpressure and resume is asynchronous", async () => {
+    using dir = tempDir("terminal-flow", { progress: Buffer.alloc(4) });
+    const progressPath = join(String(dir), "progress");
+    const total = 4 * 1024 * 1024;
+    const first = Promise.withResolvers<void>();
+    const eof = Promise.withResolvers<void>();
+    const chunks: Buffer[] = [];
+    let callbacks = 0;
+    let synchronous = false;
+    let inResume = false;
+    await using proc = Bun.spawn({
+      cmd: [
+        bunExe(),
+        "-e",
+        `
+        const fs = require("node:fs");
+        const fd = fs.openSync(${JSON.stringify(progressPath)}, "r+");
+        const chunk = Buffer.alloc(256, 120);
+        const progress = Buffer.alloc(4);
+        for (let written = 0; written < ${total};) {
+          written += fs.writeSync(1, chunk);
+          progress.writeUInt32LE(written);
+          fs.writeSync(fd, progress, 0, 4, 0);
+        }
+        fs.closeSync(fd);
+        fs.writeSync(1, "FLOW_DONE");
+      `,
+      ],
+      env: bunEnv,
+      terminal: {
+        data(terminal, data) {
+          chunks.push(Buffer.from(data));
+          callbacks++;
+          synchronous ||= inResume;
+          if (callbacks === 1) {
+            terminal.pause();
+            terminal.pause();
+            first.resolve();
+          }
+        },
+        exit() {
+          first.reject(new Error("PTY exited before first data"));
+          eof.resolve();
+        },
+      },
+    });
+    await using terminal = proc.terminal!;
+    proc.exited.then(code => first.reject(new Error(`child exited before first data: ${code}`)));
+    await first.promise;
+    const received = chunks.reduce((n, chunk) => n + chunk.length, 0);
+    let lastProgress = -1;
+    let stableSince = performance.now();
+    const deadline = stableSince + 3000;
+    // A blocked write has no notification; require stable progress over a bounded polling window.
+    while (performance.now() - stableSince < 100) {
+      const progress = fs.readFileSync(progressPath).readUInt32LE();
+      if (progress !== lastProgress) {
+        lastProgress = progress;
+        stableSince = performance.now();
+      }
+      expect(callbacks).toBe(1);
+      expect(performance.now()).toBeLessThan(deadline);
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    expect(lastProgress).toBeGreaterThan(0);
+    expect(lastProgress).toBeLessThan(total / 2);
+    expect(chunks.reduce((n, chunk) => n + chunk.length, 0)).toBe(received);
+    inResume = true;
+    terminal.resume();
+    terminal.resume();
+    inResume = false;
+    await eof.promise;
+    const output = Buffer.concat(chunks);
+    // ConPTY renders a screen and injects control sequences; POSIX PTYs preserve these bytes exactly.
+    if (isWindows) {
+      expect(Bun.stripANSI(output.toString())).toContain("FLOW_DONE");
+    } else {
+      expect(output.equals(Buffer.concat([Buffer.alloc(total, 120), Buffer.from("FLOW_DONE")]))).toBe(true);
+    }
+    expect(synchronous).toBe(false);
+    expect(fs.readFileSync(progressPath).readUInt32LE()).toBe(total);
+    expect(await proc.exited).toBe(0);
+    expect(terminal.pause()).toBeUndefined();
+    expect(terminal.resume()).toBeUndefined();
+  });
+
+  test.concurrent("pause preserves the child output tail until asynchronous resume", async () => {
+    using dir = tempDir("terminal-paused-tail", {});
+    const writtenPath = join(String(dir), "written");
+    const chunks: Buffer[] = [];
+    const eof = Promise.withResolvers<void>();
+    let exited = false;
+    let inResume = false;
+    let synchronous = false;
+    let bytesAtExit = 0;
+    // Keep the tail small enough to fit the kernel queue before the child exits.
+    await using proc = Bun.spawn({
+      cmd: [
+        bunExe(),
+        "-e",
+        `
+        const fs = require("node:fs");
+        fs.writeSync(1, Buffer.alloc(512, 120));
+        fs.writeFileSync(${JSON.stringify(writtenPath)}, "written");
+      `,
+      ],
+      env: bunEnv,
+      terminal: {
+        data(_terminal, data) {
+          synchronous ||= inResume;
+          chunks.push(Buffer.from(data));
+        },
+        exit() {
+          exited = true;
+          bytesAtExit = Buffer.concat(chunks).length;
+          eof.resolve();
+        },
+      },
+    });
+    await using terminal = proc.terminal!;
+    terminal.pause();
+    terminal.pause();
+    // macOS keeps the exiting session leader in exit until its PTY output drains.
+    const deadline = performance.now() + 3000;
+    while (!fs.existsSync(writtenPath)) {
+      expect(performance.now()).toBeLessThan(deadline);
+      if (proc.exitCode !== null && proc.exitCode !== 0) {
+        throw new Error(`child failed before writing its tail: ${proc.exitCode}`);
+      }
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    expect(chunks).toHaveLength(0);
+    expect(exited).toBe(false);
+    inResume = true;
+    terminal.resume();
+    inResume = false;
+    expect(chunks).toHaveLength(0);
+    await eof.promise;
+    const output = Buffer.concat(chunks);
+    if (isWindows) {
+      expect(Bun.stripANSI(output.toString()).replace(/[\r\n]/g, "")).toBe(Buffer.alloc(512, 120).toString());
+    } else {
+      expect(output.equals(Buffer.alloc(512, 120))).toBe(true);
+    }
+    expect(bytesAtExit).toBe(output.length);
+    expect(synchronous).toBe(false);
+    expect(await proc.exited).toBe(0);
+  });
+
+  test.concurrent("close and async disposal while paused", async () => {
+    const terminal = new Bun.Terminal({});
+    terminal.pause();
+    terminal.close();
+    expect(terminal.closed).toBe(true);
+    expect(terminal.pause()).toBeUndefined();
+    expect(terminal.resume()).toBeUndefined();
+    terminal.close();
+    const disposed = new Bun.Terminal({});
+    disposed.pause();
+    disposed.resume();
+    disposed.pause();
+    await disposed[Symbol.asyncDispose]();
+    expect(disposed.closed).toBe(true);
+  });
+
+  test.concurrent.each([false, true])("pause preserves event-loop refness (unref=%s)", async unref => {
+    await using proc = Bun.spawn({
+      cmd: [
+        bunExe(),
+        "-e",
+        `
+        const terminal = new Bun.Terminal({});
+        terminal.pause();
+        ${unref ? "terminal.unref();" : "terminal.unref(); terminal.ref();"}
+        process.on("beforeExit", () => {
+          console.log("beforeExit");
+          terminal.close();
+        });
+        // The unreferenced timer only runs if the paused terminal still keeps the loop alive.
+        setTimeout(() => { console.log("kept alive"); terminal.close(); }, 20).unref();
+      `,
+      ],
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect(stdout).toBe(unref ? "beforeExit\n" : "kept alive\nbeforeExit\n");
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
   });
 });
 
