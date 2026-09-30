@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve zero byte counts and original buffers in filesystem read/write error callbacks so nonblocking WriteStreams can retry EAGAIN. Ports [oven-sh/bun#41440](https://github.com/oven-sh/bun/pull/41440). Thanks @robobun!
+
 - Start TLS reads after adopting paused Duplex and HTTP CONNECT transports, including buffered handshake bytes and pending plaintext acknowledgements.
 - Clone only Map and Set entries, ignoring custom own properties without invoking getters, while retaining compatibility with existing serialized records.
 
