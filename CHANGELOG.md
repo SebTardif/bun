@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+- Report the actual stat error when an install patch file cannot be read, including symlink-loop errors. Thanks @SebTardif!
+- Resume injected HTTP and TLS connections after attaching server listeners so paused proxy sockets can deliver requests. Thanks @RomneyDa!
 - Sync upstream through `ba3f27d1d1ce359d4eed842c135f0f6fba1acb00`, preserving fork process retries, module URL identity, worker preloads, TLS trust settings, and CPU profiling while integrating upstream TTY handling and code-generation restrictions.
+- Copy regular-file `/dev/fd` sources on macOS with `fs.copyFile` and `fs.cp` above 128 KiB, preserving the source descriptor's offset at every size.
+- Keep runtime plugin resolution out of the content-addressed transpiler cache so changed plugin answers and temporary module generations cannot reuse stale import paths. Thanks @vincentkoc!
 - Preserve child signals and inherited stdio in `bun run --silent` on macOS when startup marks descriptors close-on-exec.
 - Publish Node-compatible `http.server.response.finish` diagnostics with request, response, socket, and server identities before advancing queued HTTP responses.
 - Resolve `file:` URL preloads (`--preload`, `--import`, and Worker `execArgv`) like `import()` specifiers, so percent-encoded paths and Windows drive letters load instead of failing with "preload not found".
