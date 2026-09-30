@@ -589,6 +589,37 @@ unsafe fn configure_debugger(
     };
 
     let Some(debugger) = debugger else { return };
+    // The debugger evaluates what its client sends, whatever the engine's eval setting.
+    if bun_core::code_generation_from_strings() == bun_core::CodeGenerationFromStrings::Disallowed {
+        const STRICT: &str = "--disallow-code-generation-from-strings=strict";
+        // Editors set this one for every process started from their terminals (Bun's VS Code
+        // extension does by default), so it does not say that anybody asked to debug this one.
+        if debugger.mode == Mode::Connect {
+            bun_core::warn!(
+                "BUN_INSPECT_CONNECT_TO is ignored with {}: the inspector evaluates code from strings",
+                STRICT
+            );
+            bun_core::Output::flush();
+            return;
+        }
+        // Asking for both is an error, so that the process never runs without something its
+        // operator asked for.
+        bun_core::Output::err_generic(
+            "{} cannot be used with {}: the inspector evaluates code from strings\n",
+            (
+                match cli_flag {
+                    CliDebugger::Enable(enable) if enable.set_breakpoint_on_first_line => {
+                        "--inspect-brk"
+                    }
+                    CliDebugger::Enable(enable) if enable.wait_for_connection => "--inspect-wait",
+                    CliDebugger::Enable(_) => "--inspect",
+                    CliDebugger::Unspecified => "BUN_INSPECT",
+                },
+                STRICT,
+            ),
+        );
+        bun_core::Global::exit(1);
+    }
     let mode = debugger.mode;
     // SAFETY: `vm` is the unique freshly-boxed VM; sole writer.
     unsafe { (*vm).debugger = Some(Box::new(debugger)) };
@@ -1551,7 +1582,7 @@ unsafe fn parse_worker_exec_argv(
     let mut no_ffi_cc = false;
     let mut pending = Pending::None;
     let parse_interval = |v: &[u8]| std::str::from_utf8(v).ok().and_then(|s| s.parse().ok());
-    for &arg in exec_argv {
+    for (index, &arg) in exec_argv.iter().enumerate() {
         if arg.is_null() {
             continue;
         }
@@ -1605,6 +1636,11 @@ unsafe fn parse_worker_exec_argv(
             pending = Pending::Dir;
         } else if let Some(v) = bytes.strip_prefix(b"--cpu-prof-dir=") {
             out.cpu_prof_dir = Some(v.into());
+        } else if matches!(
+            bytes.strip_prefix(b"--disallow-code-generation-from-strings".as_slice()),
+            Some([] | [b'=', ..])
+        ) {
+            out.invalid.get_or_insert(index);
         }
     }
     // Override both unconditionally: the caller ANDs them with the parent's values.

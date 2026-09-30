@@ -348,6 +348,7 @@ impl WebWorker {
         specifier_str: &BunString,
         eval_source_str: &BunString,
         error_message: &mut BunString,
+        error_is_invalid_exec_argv: &mut bool,
         _parent_context_id: u32,
         this_context_id: u32,
         mini: bool,
@@ -504,6 +505,16 @@ impl WebWorker {
                 (hooks.parse_worker_exec_argv)(bun_core::ffi::slice(exec_argv_ptr, exec_argv_len))
             }
         };
+        if let Some(invalid) = exec_argv.invalid {
+            use bun_core::WTFStringImplExt as _;
+            // SAFETY: an index into the same slice, whose strings the caller keeps alive.
+            let arg = unsafe { &**exec_argv_ptr.add(invalid) }.to_owned_slice_z();
+            let mut message = b"Initiated Worker with invalid execArgv flags: ".to_vec();
+            message.extend_from_slice(arg.as_bytes());
+            *error_message = BunString::clone_utf8(&message);
+            *error_is_invalid_exec_argv = true;
+            return core::ptr::null_mut();
+        }
         // A Worker cannot re-enable what its parent disabled.
         if let Some(allow_addons) = exec_argv.allow_addons {
             let parent_allows = transform_options.allow_addons.unwrap_or(true);

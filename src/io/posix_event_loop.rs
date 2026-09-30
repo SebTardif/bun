@@ -327,6 +327,9 @@ impl FilePoll {
         if flags.contains(Flags::Socket) {
             return FileType::Socket;
         }
+        if flags.contains(Flags::Tty) {
+            return FileType::File;
+        }
         if flags.contains(Flags::Nonblocking) {
             return FileType::NonblockingPipe;
         }
@@ -1243,7 +1246,7 @@ pub enum Flags {
     IgnoreUpdates,
 
     Socket,
-
+    Tty,
     #[cfg(target_os = "macos")]
     ProcessRetry,
 }

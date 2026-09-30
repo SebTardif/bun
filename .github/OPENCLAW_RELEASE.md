@@ -249,10 +249,13 @@ reaches a release in one of three ways:
    built on the pull request's base, which can be weeks behind `main`.
 3. Neither: the fork needs its own WebKit prebuilts (see decisions below).
 
-The current OpenClaw CI build (`steipete/bun` `openclaw-ci-ddfce5d0-webkit-4429d113`)
-carries the FTL fix of oven-sh/WebKit#578 on a local WebKit build. That pull
-request is still open and its preview is 392 commits behind the pinned
-`35e8970`, so releases of this fork do not have that fix yet.
+The pinned WebKit `f20ce7744553c910bcf16a33faf976af208de091` contains the
+upstream replacement for oven-sh/WebKit#578, which is now closed. String
+indexing lowers its bounds check to a separate `CheckInBounds` node, so
+dead-code elimination preserves the check even when the access result is
+unused. The pin includes `JSTests/stress/string-index-dce-bounds-check.js`.
+This fixes the FTL CSS-tokenizer defect that previously required OpenClaw's
+custom WebKit build; this fork no longer needs that backport.
 
 ## Upstream sync and security patches
 
@@ -298,15 +301,11 @@ target as a dry run.
    (c) stay as linked: the Mac app re-signs, and the Tauri app's own downloads
    carry no quarantine attribute, but anything downloaded by a browser is
    refused by Gatekeeper. Recommended: (a).
-2. **Whether the fork builds its own WebKit.** Until oven-sh/WebKit#578 lands,
-   releases lack the FTL fix the current OpenClaw CI build carries, so
-   switching `setup-test-bun` to these releases brings back the CSS tokenizer
-   loop. The options are to push #578 upstream and wait, or run an
-   `openclaw/WebKit` fork that builds the release lanes (linux and macOS lto,
-   and later musl and Windows). oven-sh/WebKit builds a lane in 4–15 minutes on
-   32-core runners that a fork cannot use; on GitHub larger runners (Team
-   plan) that is a few dollars per WebKit revision. `webkit.ts` would also have
-   to take the prebuilt repository from a constant, a small fork-only change.
+2. **Whether the fork builds its own WebKit.** Continue using oven-sh/WebKit
+   prebuilts: the pinned engine contains the upstream replacement for #578.
+   A future fix unavailable in an upstream prebuilt would require separate
+   WebKit build lanes and an explicit prebuilt repository setting in
+   `webkit.ts` before a fork-specific engine could be released.
 3. **Build runner.** Recommended: keep GitHub's free runners. Change
    `vars.OPENCLAW_RELEASE_BUILD_RUNNER` only if release latency matters.
 4. **Release visibility.** Releases are prereleases and never "latest" until

@@ -61,6 +61,7 @@ void* WebWorker__create(
     const BunString* url,
     const BunString* evalSource,
     BunString* errorMessage,
+    bool* errorIsInvalidExecArgv,
     uint32_t parentContextId,
     uint32_t contextId,
     bool miniMode,
@@ -169,6 +170,7 @@ ExceptionOr<void> WorkerMessagingProxy::startWorkerGlobalScope(const String& scr
     // The thread holds a ref on the proxy until releaseWorkerThread().
     ref();
     BunString errorMessage = BunStringEmpty;
+    bool errorIsInvalidExecArgv = false;
     BunString name = Bun::toString(m_options.name);
     BunString url = Bun::toString(scriptURL);
     BunString evalSource = Bun::toString(m_options.evalSource);
@@ -179,6 +181,7 @@ ExceptionOr<void> WorkerMessagingProxy::startWorkerGlobalScope(const String& scr
         &url,
         &evalSource,
         &errorMessage,
+        &errorIsInvalidExecArgv,
         m_loaderContextIdentifier,
         m_workerContextIdentifier,
         m_options.mini,
@@ -205,7 +208,7 @@ ExceptionOr<void> WorkerMessagingProxy::startWorkerGlobalScope(const String& scr
     if (!m_workerThread) {
         m_state.store(State::Closed);
         deref();
-        return Exception { TypeError, errorMessage.transferToWTFString() };
+        return Exception { errorIsInvalidExecArgv ? WORKER_INVALID_EXEC_ARGV : TypeError, errorMessage.transferToWTFString() };
     }
     return {};
 }
