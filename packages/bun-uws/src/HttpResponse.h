@@ -160,12 +160,15 @@ public:
     bool closeIfIdle() {
         HttpResponseData<SSL> *data = getHttpResponseData();
         bool idle = data->isIdle;
-        if (idle && HttpContext<SSL>::fromSocket((us_socket_t *) this)->isNodeHttp()) {
+        if (HttpContext<SSL>::fromSocket((us_socket_t *) this)->isNodeHttp()) {
+            /* A bodyless handler can end its response before the parser clears message timing. */
+            idle = data->filteredOpen && !(data->state & (HttpResponseData<SSL>::HTTP_RESPONSE_PENDING | HttpResponseData<SSL>::HTTP_NODE_TUNNEL_AFTER_BODY))
+                && data->nodeHttpQueuedPipelinedCount == 0 && !data->isConnectRequest;
             /* node:http: a connection that still receives a request (a body, or the head of the next one) is not idle, also after its
              * response ended (Node.js: last_message_start_). In the request handler the parser has not entered a chunked body yet, so the armed body handler tells. */
             const bool messageOpen = ((HttpResponseData<SSL, true> *) data)->lastMessageStartMs != 0;
             /* The chunk iterator clears its remaining-byte sentinel after the fin callback returns. */
-            idle = !(messageOpen && (data->inStream != nullptr || data->hasIncompleteRequestBody())) && !data->hasBufferedPartialRequestHeaders();
+            idle = idle && !(messageOpen && (data->inStream != nullptr || data->hasIncompleteRequestBody())) && !data->hasBufferedPartialRequestHeaders();
             if (idle && messageOpen && !Super::hasFullyDrained()) {
                 /* The handler of this request still runs and its response has unsent bytes: close when they are out. */
                 data->state |= HttpResponseData<SSL>::HTTP_CLOSE_WHEN_IDLE;

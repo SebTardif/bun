@@ -613,6 +613,71 @@ test("closeIdleConnections() after close() reaps an idle connection, not one tha
   }
 });
 
+test("closeIdleConnections() preserves a TLS connection while its handshake is incomplete", async () => {
+  const server = createHttpsServer({ ...tlsCert, maxVersion: "TLSv1.2" }, (_req, res) =>
+    res.end("handshake preserved"),
+  );
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const firstFlight = Promise.withResolvers<void>();
+  const sockets: ReturnType<typeof connect>[] = [];
+  const held: Buffer[] = [];
+  let holding = true;
+  let downstream: ReturnType<typeof connect>;
+  const proxy = createNetServer(socket => {
+    downstream = socket;
+    const upstream = connect((server.address() as AddressInfo).port, "127.0.0.1");
+    sockets.push(socket, upstream);
+    socket.on("error", firstFlight.reject);
+    upstream.on("error", firstFlight.reject);
+    socket.pipe(upstream);
+    upstream.on("data", chunk => {
+      if (holding) {
+        held.push(chunk);
+        firstFlight.resolve();
+      } else {
+        socket.write(chunk);
+      }
+    });
+    upstream.on("end", () => socket.end());
+  });
+  proxy.listen(0, "127.0.0.1");
+  await once(proxy, "listening");
+  let client: ReturnType<typeof tlsConnect> | undefined;
+  try {
+    client = tlsConnect({
+      port: (proxy.address() as AddressInfo).port,
+      host: "127.0.0.1",
+      rejectUnauthorized: false,
+      maxVersion: "TLSv1.2",
+    });
+    client.on("error", firstFlight.reject);
+    await Promise.all([
+      (async () => {
+        // The server has answered ClientHello, but the client cannot finish until this flight is released.
+        await firstFlight.promise;
+        expect(client!.secureConnecting).toBe(true);
+        server.closeIdleConnections();
+        holding = false;
+        for (const chunk of held) downstream.write(chunk);
+      })(),
+      (async () => {
+        await once(client!, "secureConnect");
+        client!.write("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let response = "";
+        for await (const chunk of client!) response += chunk;
+        expect(response.slice(response.indexOf("\r\n\r\n") + 4)).toBe("handshake preserved");
+      })(),
+    ]);
+  } finally {
+    client?.destroy();
+    for (const socket of sockets) socket.destroy();
+    proxy.close();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 // A connection whose response has ended is idle while its handler is still on
 // the stack. How many reads its request head took makes no difference.
 test.each([

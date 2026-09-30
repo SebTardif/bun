@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Close idle Node HTTP connections after bodyless responses finish inside their handlers, while preserving pending request bodies, queued responses, and tunnels.
 - Report the actual stat error when an install patch file cannot be read, including symlink-loop errors. Thanks @SebTardif!
 - Resume injected HTTP and TLS connections after attaching server listeners so paused proxy sockets can deliver requests. Thanks @RomneyDa!
 - Sync upstream through `ba3f27d1d1ce359d4eed842c135f0f6fba1acb00`, preserving fork process retries, module URL identity, worker preloads, TLS trust settings, and CPU profiling while integrating upstream TTY handling and code-generation restrictions.
