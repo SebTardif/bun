@@ -36,23 +36,11 @@ Vector<JSC::Identifier> IdentifierEventListenerMap::eventTypes() const
     });
 }
 
-static inline size_t findListener(const SimpleEventListenerVector& listeners, EventListener& listener)
-{
-    for (size_t i = 0; i < listeners.size(); ++i) {
-        auto& registeredListener = listeners[i];
-        if (registeredListener->callback() == listener)
-            return i;
-    }
-    return notFound;
-}
-
 bool IdentifierEventListenerMap::add(const JSC::Identifier& eventType, Ref<EventListener>&& listener, bool once)
 {
     Locker locker { m_lock };
 
     if (auto* listeners = find(eventType)) {
-        if (findListener(*listeners, listener) != notFound)
-            return false; // Duplicate listener.
         listeners->append(SimpleRegisteredEventListener::create(WTF::move(listener), once));
         return true;
     }
@@ -66,8 +54,6 @@ bool IdentifierEventListenerMap::prepend(const JSC::Identifier& eventType, Ref<E
     Locker locker { m_lock };
 
     if (auto* listeners = find(eventType)) {
-        if (findListener(*listeners, listener) != notFound)
-            return false; // Duplicate listener.
         listeners->insert(0, SimpleRegisteredEventListener::create(WTF::move(listener), once));
         return true;
     }
@@ -76,30 +62,24 @@ bool IdentifierEventListenerMap::prepend(const JSC::Identifier& eventType, Ref<E
     return true;
 }
 
-static bool removeListenerFromVector(SimpleEventListenerVector& listeners, EventListener& listener)
-{
-    size_t indexOfRemovedListener = findListener(listeners, listener);
-    if (indexOfRemovedListener == notFound) [[unlikely]]
-        return false;
-
-    listeners[indexOfRemovedListener]->markAsRemoved();
-    listeners.removeAt(indexOfRemovedListener);
-    return true;
-}
-
-bool IdentifierEventListenerMap::remove(const JSC::Identifier& eventType, EventListener& listener)
+bool IdentifierEventListenerMap::remove(const JSC::Identifier& eventType, SimpleRegisteredEventListener& registration)
 {
     Locker locker { m_lock };
-
-    for (unsigned i = 0; i < m_entries.size(); ++i) {
-        if (m_entries[i].first == eventType) {
-            bool wasRemoved = removeListenerFromVector(m_entries[i].second, listener);
-            if (m_entries[i].second.isEmpty())
+    for (size_t i = 0; i < m_entries.size(); ++i) {
+        if (m_entries[i].first != eventType)
+            continue;
+        auto& listeners = m_entries[i].second;
+        for (size_t j = listeners.size(); j--;) {
+            if (listeners[j].get() != &registration)
+                continue;
+            listeners[j]->markAsRemoved();
+            listeners.removeAt(j);
+            if (listeners.isEmpty())
                 m_entries.removeAt(i);
-            return wasRemoved;
+            return true;
         }
+        return false;
     }
-
     return false;
 }
 

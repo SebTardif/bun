@@ -49,21 +49,13 @@ void EventEmitter::addListenerForBindings(const Identifier& eventType, RefPtr<Ev
     addListener(eventType, listener.releaseNonNull(), once, prepend);
 }
 
-void EventEmitter::removeListenerForBindings(const Identifier& eventType, RefPtr<EventListener>&& listener)
-{
-    if (!listener)
-        return;
-
-    removeListener(eventType, *listener);
-}
-
-bool EventEmitter::removeListener(const Identifier& eventType, EventListener& listener)
+bool EventEmitter::removeListener(const Identifier& eventType, SimpleRegisteredEventListener& registration)
 {
     auto* data = eventTargetData();
     if (!data)
         return false;
 
-    if (data->eventListenerMap.remove(eventType, listener)) {
+    if (data->eventListenerMap.remove(eventType, registration)) {
         eventListenersDidChange();
 
         if (this->onDidChangeListener)
@@ -162,25 +154,6 @@ int EventEmitter::listenerCount(const Identifier& eventType)
     return result;
 }
 
-Vector<JSObject*> EventEmitter::getListeners(const Identifier& eventType)
-{
-    auto* data = eventTargetData();
-    if (!data)
-        return {};
-    Vector<JSObject*> listeners;
-    if (auto* listenersVector = data->eventListenerMap.find(eventType)) {
-        for (auto& registeredListener : *listenersVector) {
-            if (registeredListener->wasRemoved()) [[unlikely]]
-                continue;
-
-            if (JSC::JSObject* jsFunction = registeredListener->callback().jsFunction()) {
-                listeners.append(jsFunction);
-            }
-        }
-    }
-    return listeners;
-}
-
 // https://dom.spec.whatwg.org/#concept-event-listener-invoke
 bool EventEmitter::fireEventListeners(const Identifier& eventType, const MarkedArgumentBuffer& arguments)
 {
@@ -222,11 +195,15 @@ bool EventEmitter::innerInvokeEventListeners(const Identifier& eventType, Simple
     auto& context = *scriptExecutionContext();
     VM& vm = context.vm();
 
+    SimpleEventListenerSnapshot snapshot(vm, WTF::move(listeners));
+    if (snapshot.hasOverflowed()) [[unlikely]]
+        CRASH();
+
     auto* thisObject = protectedThis->m_thisObject.get();
     JSC::JSValue thisValue = thisObject ? thisObject : JSC::jsUndefined();
     auto fired = false;
 
-    for (auto& registeredListener : listeners) {
+    for (auto& registeredListener : snapshot.listeners()) {
         // The below code used to be in here, but it's WRONG. Even if a listener is removed,
         // if we're in the middle of firing listeners, we still need to call it.
         // if (registeredListener->wasRemoved()) [[unlikely]]
@@ -238,12 +215,21 @@ bool EventEmitter::innerInvokeEventListeners(const Identifier& eventType, Simple
         // event listeners with 'once' flag may get collected as soon as they get unregistered below,
         // before we call the js function.
         JSObject* jsFunction = callback.jsFunction();
+        // Consume the same fired guard exposed by rawListeners(), including held wrappers.
+        if (registeredListener->isOnce()) {
+            if (auto* wrapper = registeredListener->onceWrapper())
+                jsFunction = wrapper;
+        }
         JSC::EnsureStillAliveScope wrapperProtector(callback.wrapper());
         JSC::EnsureStillAliveScope jsFunctionProtector(jsFunction);
 
-        // Do this before invocation to avoid reentrancy issues.
-        if (registeredListener->isOnce())
-            removeListener(eventType, callback);
+        // Exposed wrappers own removal and the fired guard, including when registered again.
+        if (registeredListener->isOnce() && !registeredListener->onceWrapper()) {
+            if (registeredListener->hasFired())
+                continue;
+            registeredListener->markAsFired();
+            removeListener(eventType, *registeredListener);
+        }
 
         if (!jsFunction) [[unlikely]]
             continue;
