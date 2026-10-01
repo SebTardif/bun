@@ -51,7 +51,12 @@ function handleOf(object: object) {
 
 const triggers: Record<string, (req: http.IncomingMessage, res: http.ServerResponse) => void> = {
   "detachSocket": (req, res) => res.detachSocket(req.socket),
-  "emit-close": (_req, res) => void res.emit("close"),
+  "emit-close+detachSocket": (req, res) => {
+    // Like Node, the fork waits for finish/detach: a synthetic close alone
+    // does not transfer the connection. Revoke it after the close listeners ran.
+    res.emit("close");
+    res.detachSocket(req.socket);
+  },
   "emit-finish": (_req, res) => void res.emit("finish"),
   "clear-httpMessage": req => void ((req.socket as any)._httpMessage = null),
 };

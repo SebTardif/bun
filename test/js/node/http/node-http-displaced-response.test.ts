@@ -3,7 +3,7 @@ import { bunEnv, bunExe, isASAN, isCI, isDebug } from "harness";
 import { join } from "path";
 
 // A connection has one current response. The server socket gives the connection to the next
-// response when JS says that the current one is done (res.detachSocket(), a 'close' or 'finish'
+// response when JS says that the current one is done (res.detachSocket(), a 'finish'
 // event, socket._httpMessage = null), or when the next request of a keep-alive connection
 // arrives. A WebSocket can also adopt the socket while responses are queued. A response that
 // lost the connection no longer hears about a close, so it must not keep a pointer to the
@@ -46,7 +46,7 @@ const uses = [
   "emit-close",
   "nothing",
 ];
-const triggers = ["detachSocket", "emit-close", "emit-finish", "clear-httpMessage"];
+const triggers = ["detachSocket", "emit-close+detachSocket", "emit-finish", "clear-httpMessage"];
 
 describe.concurrent.each(["tcp", "tls"])("a response that lost the connection to the next response (%s)", transport => {
   test.each(triggers)(
