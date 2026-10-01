@@ -675,6 +675,38 @@ test.concurrent("a %23 in the path of a file:// URL is not a fragment", async ()
   expect(exitCode).toBe(0);
 });
 
+test.concurrent("require and import share an ESM instance in a literal # directory", async () => {
+  using dir = tempDir("import-require-literal-hash", {
+    "C#proj/target.mjs": `
+      globalThis.hits = (globalThis.hits ?? 0) + 1;
+      export const hit = globalThis.hits;
+    `,
+    "C#proj/entry.mjs": `
+      import { createRequire } from "node:module";
+      import * as imported from "./target.mjs";
+      const required = createRequire(import.meta.url)("./target.mjs");
+      const url = new URL("./target.mjs", import.meta.url).href;
+      const dynamic = await import(url);
+      const fragment = await import(url + "#other");
+      console.log(JSON.stringify({
+        same: imported === required && imported === dynamic,
+        distinct: imported !== fragment,
+        hits: [imported.hit, required.hit, dynamic.hit, fragment.hit],
+      }));
+    `,
+  });
+  await using proc = Bun.spawn({
+    cmd: [bunExe(), "C#proj/entry.mjs"],
+    env: bunEnv,
+    cwd: String(dir),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect(stdout.trim()).toBe('{"same":true,"distinct":true,"hits":[1,1,1,2]}');
+  expect({ stderr, exitCode, signalCode: proc.signalCode }).toEqual({ stderr: "", exitCode: 0, signalCode: null });
+});
+
 describe.each(["target?copy.mjs", "literal?dir/target.mjs"])("encoded delimiter in %s", filename => {
   test.concurrent.skipIf(isWindows)("a %3F in the path of a file:// URL is not a query", async () => {
     const targetSource = `
