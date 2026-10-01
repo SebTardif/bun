@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep CommonJS and ESM module keys aligned for literal `#` paths, preventing duplicate evaluation and split-bundle namespace crashes.
+
+- Sync upstream through `4b02e1031d6195d96fc0446dfbff49297f89f2d6`, preserving unfinished HTTP aborts and immediate header flushing on the server socket's response ownership contract, promise-aware console writes, and module URL cache identity.
+
 - Build and test Linux x64 pull requests with cached no-LTO release builds, selected compatibility tests, downloadable binaries, and nightly main coverage.
 
 - Preserve ownership of Node-API threadsafe-function payloads when a worker stops between callbacks, returning queued payloads before finalization. Adapts the checkpoint ordering from [oven-sh/bun#36831](https://github.com/oven-sh/bun/pull/36831). Thanks @robobun!

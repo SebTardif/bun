@@ -1504,3 +1504,87 @@ describe("destroy aborts the connection without completing a response", () => {
     }
   });
 });
+
+describe.each([false, true])("abort after a pipelined response is granted the connection (tls=%s)", tls => {
+  test.each([1, 3])("response %i aborts without completing itself or its queued successors", async abortIndex => {
+    const responses: ServerResponse[] = [];
+    const finishes: number[] = [];
+    const closes: number[] = [];
+    const dispatched = Promise.withResolvers<void>();
+    const allClosed = Promise.withResolvers<void>();
+    const listener = (req: IncomingMessage, res: ServerResponse) => {
+      const index = responses.length;
+      responses.push(res);
+      req.on("error", () => {});
+      res.on("finish", () => finishes.push(index));
+      res.on("close", () => {
+        closes.push(index);
+        globalThis.Bun?.gc(true);
+        if (closes.length === 4) allClosed.resolve();
+      });
+      if (responses.length === 4) dispatched.resolve();
+    };
+    const keys = path.join(import.meta.dir, "../test/fixtures/keys");
+    await using server = tls
+      ? createHttpsServer(
+          {
+            key: readFileSync(path.join(keys, "agent1-key.pem")),
+            cert: readFileSync(path.join(keys, "agent1-cert.pem")),
+          },
+          listener,
+        )
+      : createServer(listener);
+    await once(server.listen(0, "127.0.0.1"), "listening");
+    const port = (server.address() as AddressInfo).port;
+    const client = tls
+      ? tlsConnect({ port, host: "127.0.0.1", rejectUnauthorized: false })
+      : connect(port, "127.0.0.1");
+    const prefix = Array.from(
+      { length: abortIndex },
+      (_, index) =>
+        `HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: keep-alive\r\nKeep-Alive: timeout=5\r\n\r\n${index}`,
+    ).join("");
+    let wire = "";
+    const prefixReceived = Promise.withResolvers<void>();
+    const closed = new Promise<void>((resolve, reject) => {
+      client.on("data", chunk => {
+        wire += chunk.toString();
+        if (wire.length >= prefix.length) prefixReceived.resolve();
+      });
+      client.on("error", error => {
+        if ((error as NodeJS.ErrnoException).code !== "ECONNRESET") {
+          prefixReceived.reject(error);
+          reject(error);
+        }
+      });
+      client.on("close", () => {
+        if (wire.length < prefix.length)
+          prefixReceived.reject(new Error("connection closed before preceding responses"));
+        resolve();
+      });
+    });
+    try {
+      client.write(Array.from({ length: 4 }, () => "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").join(""));
+      await dispatched.promise;
+      expect(responses[abortIndex].socket).toBeNull();
+      for (let index = 0; index < abortIndex; index++) {
+        const res = responses[index];
+        res.sendDate = false;
+        res.writeHead(200, { "Content-Length": "1", "Connection": "keep-alive", "Keep-Alive": "timeout=5" });
+        res.end(String(index));
+      }
+      await prefixReceived.promise;
+      expect(responses[abortIndex].socket).not.toBeNull();
+      responses[abortIndex].destroy();
+      await Promise.all([closed, allClosed.promise]);
+      expect({ wire, finishes, closes: closes.toSorted() }).toEqual({
+        wire: prefix,
+        finishes: Array.from({ length: abortIndex }, (_, index) => index),
+        closes: [0, 1, 2, 3],
+      });
+    } finally {
+      client.destroy();
+      server.closeAllConnections();
+    }
+  });
+});
