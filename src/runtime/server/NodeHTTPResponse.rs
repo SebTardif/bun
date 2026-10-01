@@ -20,6 +20,53 @@ use crate::server::{AnyServer, AnyServerTag, HTTPStatusText, ServerWebSocket};
 
 bun_core::declare_scope!(NodeHTTPResponse, visible);
 
+/// The uWS response of the socket. JSNodeHTTPServerSocket grants it to one response at a time and takes it back.
+mod connection {
+    use super::Flags;
+    use bun_uws as uws;
+    use core::cell::Cell;
+
+    pub(super) struct Connection(Cell<Option<uws::AnyResponse>>);
+
+    const _: () = assert!(size_of::<Connection>() == size_of::<Option<uws::AnyResponse>>());
+
+    impl Connection {
+        pub(super) fn new(raw_response: uws::AnyResponse) -> Self {
+            Self(Cell::new(Some(raw_response)))
+        }
+
+        /// To send bytes or change the state of the response in flight. Only for the current response.
+        #[inline]
+        pub(super) fn writer(&self, flags: Flags) -> Option<uws::AnyResponse> {
+            if flags.contains(Flags::CURRENT) {
+                self.0.get()
+            } else {
+                None
+            }
+        }
+
+        /// To read the connection's state or control the reads of the request. Also for a queued response.
+        #[inline]
+        pub(super) fn reader(&self) -> Option<uws::AnyResponse> {
+            self.0.get()
+        }
+
+        /// A WebSocket adopts the socket. Only the current response can hand it over.
+        pub(super) fn take_for_upgrade(&self, flags: Flags) -> Option<uws::AnyResponse> {
+            if flags.contains(Flags::CURRENT) {
+                self.0.take()
+            } else {
+                None
+            }
+        }
+
+        /// The socket closed, or the server socket took the connection back.
+        pub(super) fn release(&self) {
+            self.0.set(None);
+        }
+    }
+}
+
 /// Intrusively ref-counted m_ctx payload of a `.classes.ts` wrapper.
 ///
 /// `#[JsClass(no_constructor)]` wires the import-side `${T}__fromJS` /
@@ -33,7 +80,7 @@ bun_core::declare_scope!(NodeHTTPResponse, visible);
 pub(crate) struct NodeHTTPResponse {
     ref_count: bun_ptr::RefCount<Self>,
 
-    pub(crate) raw_response: Cell<Option<uws::AnyResponse>>,
+    connection: connection::Connection,
 
     pub(crate) flags: Cell<Flags>,
 
@@ -79,6 +126,8 @@ bitflags! {
         const REQUEST_HAS_COMPLETED               = 1 << 1;
         const ENDED                               = 1 << 2;
         const UPGRADED                            = 1 << 3;
+        /// The server socket granted the connection to this response. A queued pipelined response waits for it.
+        const CURRENT                             = 1 << 4;
         const IS_REQUEST_PENDING                  = 1 << 5;
         /// node:http handed this connection to a raw 'upgrade'/'connect'
         /// tunnel (JSNodeHTTPServerSocket::upgradeToTunnelMode).
@@ -87,6 +136,8 @@ bitflags! {
         const DISPATCH_THREW_WHILE_QUEUED         = 1 << 9;
     }
 }
+
+const _: () = assert!(size_of::<Flags>() == 2);
 
 impl Default for Flags {
     fn default() -> Self {
@@ -414,9 +465,19 @@ impl NodeHTTPResponse {
 
     // ─────────────────────────────────────────────────────────────────────────
 
+    #[inline]
+    pub(crate) fn writer(&self) -> Option<uws::AnyResponse> {
+        self.connection.writer(self.flags.get())
+    }
+
+    #[inline]
+    pub(crate) fn reader(&self) -> Option<uws::AnyResponse> {
+        self.connection.reader()
+    }
+
     pub(crate) fn get_this_value(&self) -> JSValue {
         let flags = self.flags.get();
-        let Some(raw) = self.raw_response.get() else {
+        let Some(raw) = self.reader() else {
             return JSValue::ZERO;
         };
         if flags.contains(Flags::SOCKET_CLOSED) || flags.contains(Flags::UPGRADED) {
@@ -439,7 +500,7 @@ impl NodeHTTPResponse {
 
     fn get_server_socket_value(&self) -> JSValue {
         let flags = self.flags.get();
-        let Some(raw) = self.raw_response.get() else {
+        let Some(raw) = self.reader() else {
             return JSValue::ZERO;
         };
         if flags.contains(Flags::SOCKET_CLOSED) || flags.contains(Flags::UPGRADED) {
@@ -457,7 +518,7 @@ impl NodeHTTPResponse {
         if flags.contains(Flags::SOCKET_CLOSED) || flags.contains(Flags::UPGRADED) {
             return;
         }
-        let Some(raw) = self.raw_response.get() else {
+        let Some(raw) = self.reader() else {
             return;
         };
         let mut ptr: *const u8 = std::ptr::null();
@@ -478,7 +539,7 @@ impl NodeHTTPResponse {
     pub(crate) fn pause_socket(&self) {
         scoped_log!(NodeHTTPResponse, "pauseSocket");
         let flags = self.flags.get();
-        let Some(raw) = self.raw_response.get() else {
+        let Some(raw) = self.reader() else {
             return;
         };
         if flags.contains(Flags::SOCKET_CLOSED)
@@ -499,7 +560,7 @@ impl NodeHTTPResponse {
         _frame: &CallFrame,
     ) -> JsResult<JSValue> {
         let flags = self.flags.get();
-        let Some(raw) = self.raw_response.get() else {
+        let Some(raw) = self.reader() else {
             return Ok(JSValue::UNDEFINED);
         };
         if flags.contains(Flags::SOCKET_CLOSED)
@@ -519,7 +580,7 @@ impl NodeHTTPResponse {
     fn resume_socket(&self) {
         scoped_log!(NodeHTTPResponse, "resumeSocket");
         let flags = self.flags.get();
-        let Some(raw) = self.raw_response.get() else {
+        let Some(raw) = self.reader() else {
             return;
         };
         if flags.contains(Flags::SOCKET_CLOSED)
@@ -543,7 +604,7 @@ impl NodeHTTPResponse {
         sec_websocket_extensions: &[u8],
     ) -> bool {
         let upgrade_ctx = self.upgrade_context.get().context;
-        if upgrade_ctx.is_null() {
+        if upgrade_ctx.is_null() || self.writer().is_none() {
             return false;
         }
         // `AnyServer` is a `Copy` type-erased pointer; copy it so the
@@ -601,7 +662,7 @@ impl NodeHTTPResponse {
 
         let armed_reader = self.armed_this_value.get();
         let mut ended_unfinished_body = false;
-        if let Some(raw_response) = self.raw_response.take() {
+        if let Some(raw_response) = self.connection.take_for_upgrade(self.flags.get()) {
             self.update_flags(|f| f.insert(Flags::UPGRADED));
             ended_unfinished_body = self.leave_pending(BodyReadState::Upgraded);
             // Unref the poll_ref since the socket is now upgraded to WebSocket
@@ -685,7 +746,7 @@ impl NodeHTTPResponse {
     fn release_body_slot(&self) {
         if self.body_still_arriving() {
             scoped_log!(NodeHTTPResponse, "clearOnData");
-            if let Some(raw_response) = self.raw_response.get() {
+            if let Some(raw_response) = self.reader() {
                 raw_response.clear_on_data();
             }
         }
@@ -695,7 +756,7 @@ impl NodeHTTPResponse {
         let flags = self.flags.get();
         // Once the socket is closed or has been adopted by the WebSocket
         // layer, the HTTP request/response cycle is over — no further uws
-        // callbacks will arrive on `raw_response` to balance the
+        // callbacks will arrive on the connection to balance the
         // IS_REQUEST_PENDING ref, so report not-pending so
         // `mark_request_as_done()` can release it.
         if flags.contains(Flags::SOCKET_CLOSED) || flags.contains(Flags::UPGRADED) {
@@ -785,7 +846,7 @@ impl NodeHTTPResponse {
         }
         // Don't overwrite WebSocket user data
         if !flags.contains(Flags::UPGRADED) {
-            if let Some(raw_response) = self.raw_response.get() {
+            if let Some(raw_response) = self.reader() {
                 raw_response.on_timeout(on_timeout_shim, self.as_ctx_ptr());
             }
         }
@@ -804,12 +865,11 @@ impl NodeHTTPResponse {
         if flags.contains(Flags::SOCKET_CLOSED) {
             return true;
         }
-        // `raw_response` outlives the socket of a done request: do not read it.
+        // The connection outlives the socket of a done request: do not read it.
         if flags.is_done() || flags.contains(Flags::UPGRADED) {
             return false;
         }
-        self.raw_response
-            .get()
+        self.reader()
             .is_some_and(|raw| raw.state().is_node_close_after_message())
     }
 
@@ -844,7 +904,7 @@ impl NodeHTTPResponse {
         if flags.contains(Flags::REQUEST_HAS_COMPLETED) || flags.contains(Flags::SOCKET_CLOSED) {
             return JSValue::js_number_from_int32(0);
         }
-        if let Some(raw_response) = self.raw_response.get() {
+        if let Some(raw_response) = self.reader() {
             let amount = raw_response
                 .get_buffered_amount()
                 .saturating_add(self.pending_pinned_write.get().remaining.len() as u64);
@@ -968,7 +1028,7 @@ impl NodeHTTPResponse {
         }
 
         let flags = self.flags.get();
-        let Some(raw_response) = self.raw_response.get() else {
+        let Some(raw_response) = self.writer() else {
             // We haven't emitted the "close" event yet.
             return Ok(JSValue::UNDEFINED);
         };
@@ -1121,7 +1181,7 @@ impl NodeHTTPResponse {
         let this = bun_ptr::BackRef::from(ptr::NonNull::from(self));
         let _guard = self.ref_guard();
 
-        let raw_response = this.raw_response.get();
+        let raw_response = this.writer();
         let mut result: JsResult<JSValue> = Ok(JSValue::UNDEFINED);
         {
             let run = || -> JsResult<JSValue> {
@@ -1194,7 +1254,7 @@ impl NodeHTTPResponse {
         if self.is_done() || self.is_socket_closed_or_closing() {
             return Ok(JSValue::UNDEFINED);
         }
-        let Some(raw_response) = self.raw_response.get() else {
+        let Some(raw_response) = self.writer() else {
             return Ok(JSValue::UNDEFINED);
         };
         let state = raw_response.state();
@@ -1243,7 +1303,7 @@ impl NodeHTTPResponse {
         if self.is_done() || self.is_socket_closed_or_closing() {
             return Ok(JSValue::UNDEFINED);
         }
-        let Some(raw_response) = self.raw_response.get() else {
+        let Some(raw_response) = self.writer() else {
             return Ok(JSValue::UNDEFINED);
         };
         handle_ended_if_necessary(raw_response.state(), global_object)?;
@@ -1280,10 +1340,10 @@ impl NodeHTTPResponse {
                 // synchronous `set_closed()` from `JSNodeHTTPServerSocket::
                 // onClose` has already flipped SOCKET_CLOSED, so
                 // `should_request_be_pending()` is now false; let the gate
-                // re-evaluate. Clear `raw_response` first so the
+                // re-evaluate. Release the connection first so the
                 // `clear_on_data_callback` reached from `mark_request_as_done`
                 // can't touch the dead socket.
-                self.raw_response.set(None);
+                self.connection.release();
                 self.mark_request_as_done_if_necessary();
             }
             return;
@@ -1322,10 +1382,10 @@ impl NodeHTTPResponse {
             self.on_data_or_aborted(b"", true, AbortEvent::Abort, js_this);
         }
 
-        // `raw_response` is cleared before the guard's release because
+        // The connection is released before the guard's release because
         // `mark_request_as_done_if_necessary()` + that release can drop the
         // last ref when the JS wrapper has already finalized; nothing between
-        // them reads `raw_response`, so clearing first avoids a post-destroy write.
+        // them reads the connection, so releasing first avoids a post-destroy write.
         if EVENT == AbortEvent::Abort {
             if self.flags.get().contains(Flags::ENDED) {
                 // An ended response that was still draining is over now: `finished` reads true, as after a drain.
@@ -1333,7 +1393,7 @@ impl NodeHTTPResponse {
             } else {
                 self.mark_request_as_done_if_necessary();
             }
-            self.raw_response.set(None);
+            self.connection.release();
         }
     }
 
@@ -1365,7 +1425,7 @@ impl NodeHTTPResponse {
         _frame: &CallFrame,
     ) -> JsResult<JSValue> {
         let flags = self.flags.get();
-        let Some(raw) = self.raw_response.get() else {
+        let Some(raw) = self.reader() else {
             return Ok(JSValue::FALSE);
         };
         if flags.contains(Flags::SOCKET_CLOSED) || flags.contains(Flags::UPGRADED) {
@@ -1380,6 +1440,65 @@ impl NodeHTTPResponse {
     #[uws::uws_callback(export = "Bun__NodeHTTPResponse_setClosed", no_catch)]
     pub(crate) fn set_closed(&self) {
         self.mark_socket_closed();
+    }
+
+    /// The server socket makes this queued response the connection's current response.
+    #[uws::uws_callback(export = "Bun__NodeHTTPResponse_grantConnection", no_catch)]
+    pub(crate) fn grant_connection(&self) {
+        if self.reader().is_none() {
+            return;
+        }
+        self.update_flags(|f| f.insert(Flags::CURRENT));
+    }
+
+    /// `js_this` is this response's wrapper. `adopted`: a WebSocket has the socket, so nothing of it is touched.
+    #[uws::uws_callback(export = "Bun__NodeHTTPResponse_takeBackConnection", no_catch)]
+    #[inline]
+    pub(crate) fn take_back_connection(&self, js_this: JSValue, adopted: bool) {
+        let flags = self.flags.get();
+        if flags.intersects(Flags::IS_REQUEST_PENDING | Flags::UPGRADED) {
+            return self.take_back_unfinished_connection(js_this, adopted);
+        }
+        // Finished, the case of each keep-alive request: `mark_request_as_done()` left nothing of it on the connection.
+        self.connection.release();
+        self.flags.set(flags.difference(Flags::CURRENT));
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn take_back_unfinished_connection(&self, js_this: JSValue, adopted: bool) {
+        scoped_log!(NodeHTTPResponse, "takeBackConnection");
+        let flags = self.flags.get();
+        if flags.contains(Flags::UPGRADED) {
+            // It handed the socket to the WebSocket itself.
+            return;
+        }
+
+        let _guard = self.ref_guard();
+        let global_object = self.server.global_this();
+        let pinned = self.pending_pinned_write.get();
+        if pinned.is_some() {
+            // The bytes that a write() already counted go out before the next response.
+            if !adopted && let Some(raw_response) = self.writer() {
+                raw_response.spill_body(pinned.remaining());
+            }
+            self.clear_pending_pinned_write(global_object, js_this);
+        }
+        if !adopted && let Some(raw_response) = self.reader() {
+            raw_response.clear_handlers_of(self.as_ctx_ptr());
+        }
+        self.connection.release();
+        // No close reaches it from here on, so it reads as closed now.
+        self.update_flags(|f| {
+            f.remove(Flags::CURRENT);
+            f.insert(Flags::SOCKET_CLOSED);
+        });
+        self.leave_pending(BodyReadState::Aborted);
+        if flags.contains(Flags::ENDED) {
+            self.on_request_complete();
+        } else {
+            self.mark_request_as_done_if_necessary();
+        }
     }
 
     /// Flag-only: the pending-request release happens deterministically in
@@ -1410,7 +1529,7 @@ impl NodeHTTPResponse {
         scoped_log!(NodeHTTPResponse, "doPause");
         let flags = self.flags.get();
         let ended = flags.contains(Flags::REQUEST_HAS_COMPLETED) || flags.contains(Flags::ENDED);
-        if self.raw_response.get().is_none()
+        if self.reader().is_none()
             || flags.contains(Flags::SOCKET_CLOSED)
             || flags.contains(Flags::UPGRADED)
             || (ended && !self.body_still_arriving())
@@ -1432,7 +1551,7 @@ impl NodeHTTPResponse {
         self.resume_socket();
         let flags = self.flags.get();
         Ok(JSValue::from(
-            self.raw_response.get().is_some()
+            self.reader().is_some()
                 && !flags.contains(Flags::REQUEST_HAS_COMPLETED)
                 && !flags.contains(Flags::SOCKET_CLOSED)
                 && !flags.contains(Flags::ENDED)
@@ -1479,7 +1598,7 @@ fn node_http_request_on_resolve(global_object: &JSGlobalObject, callframe: &Call
         // chunked stream stays well-formed.
         this.spill_pending_pinned_write(global_object);
         this.leave_pending(BodyReadState::Detached);
-        if let Some(raw_response) = this.raw_response.get() {
+        if let Some(raw_response) = this.writer() {
             raw_response.clear_on_writable();
             raw_response.clear_timeout();
             if raw_response.state().is_response_pending() {
@@ -1525,7 +1644,7 @@ fn node_http_request_on_reject(global_object: &JSGlobalObject, callframe: &CallF
         // so the client's chunked decoder stays in sync.
         this.spill_pending_pinned_write(global_object);
         this.leave_pending(BodyReadState::Detached);
-        if let Some(raw_response) = this.raw_response.get() {
+        if let Some(raw_response) = this.writer() {
             raw_response.clear_on_writable();
             raw_response.clear_timeout();
             if !raw_response.state().is_http_status_called() {
@@ -1556,7 +1675,7 @@ impl NodeHTTPResponse {
 
         let _guard = self.ref_guard();
         // uws is parsing this socket: it delivers the rest of the read, then closes (on_abort runs then).
-        if let Some(raw_response) = self.raw_response.get()
+        if let Some(raw_response) = self.reader()
             && raw_response.close_after_message_if_parsing()
         {
             return Ok(JSValue::UNDEFINED);
@@ -1568,9 +1687,9 @@ impl NodeHTTPResponse {
         self.clear_pending_pinned_write(global_object, JSValue::ZERO);
         self.release_body_slot();
         self.mark_socket_closed();
-        // Notify active and queued responses through transport teardown, without
-        // synthesizing a successful HTTP response.
-        if let Some(raw_response) = self.raw_response.get() {
+        // Abort the connection through its owner, including from a queued response.
+        // This does not write or complete the current HTTP response.
+        if let Some(raw_response) = self.reader() {
             Bun__NodeHTTP__close(
                 any_response_is_ssl(&raw_response),
                 raw_response.socket().cast(),
@@ -1701,7 +1820,7 @@ impl NodeHTTPResponse {
         if !p.is_some() {
             return;
         }
-        if let Some(raw) = self.raw_response.get() {
+        if let Some(raw) = self.writer() {
             raw.spill_body(p.remaining());
         }
         self.clear_pending_pinned_write(global_object, JSValue::ZERO);
@@ -1711,8 +1830,7 @@ impl NodeHTTPResponse {
     fn has_unflushed_write(&self) -> bool {
         self.pending_pinned_write.get().is_some()
             || self
-                .raw_response
-                .get()
+                .reader()
                 .is_some_and(|raw| raw.get_buffered_amount() > 0)
     }
 
@@ -1931,7 +2049,7 @@ impl NodeHTTPResponse {
         }
 
         // Like Node's _writeRaw on a destroyed socket: 'close' has not been emitted yet, so the write is dropped.
-        if self.raw_response.get().is_none() || self.is_socket_closed_or_closing() {
+        if self.writer().is_none() || self.is_socket_closed_or_closing() {
             return Ok(if IS_END {
                 JSValue::UNDEFINED
             } else {
@@ -1939,8 +2057,8 @@ impl NodeHTTPResponse {
             });
         }
 
-        // Re-read raw_response at each use site: methods that re-enter may clear it.
-        let state = self.raw_response.get().unwrap().state();
+        // Re-read the connection at each use site: methods that re-enter may release it.
+        let state = self.writer().unwrap().state();
         if !state.is_response_pending() {
             return err_throw(
                 global_object,
@@ -2000,7 +2118,7 @@ impl NodeHTTPResponse {
                     global_object,
                     callback_value.with_async_context_if_needed(global_object),
                 );
-                let raw_response = self.raw_response.get().unwrap();
+                let raw_response = self.writer().unwrap();
                 raw_response.on_writable(on_drain_shim, self.as_ctx_ptr());
             }
             // -0 would not read as negative (backpressure) in JS.
@@ -2017,12 +2135,12 @@ impl NodeHTTPResponse {
                 js::on_aborted_set_cached(this_value, global_object, JSValue::ZERO);
             }
 
-            let raw_response = self.raw_response.get().unwrap();
+            let raw_response = self.writer().unwrap();
             raw_response.clear_aborted();
             raw_response.clear_on_writable();
             raw_response.clear_timeout();
             self.update_flags(|f| f.insert(Flags::ENDED));
-            let raw_response = self.raw_response.get().unwrap();
+            let raw_response = self.writer().unwrap();
             if !state.is_http_write_called() || !bytes.is_empty() {
                 raw_response.end(bytes, state.is_http_connection_close());
             } else {
@@ -2030,7 +2148,7 @@ impl NodeHTTPResponse {
             }
 
             // Still-buffered bytes keep the request in flight until on_drain; `-(len + 1)` says so.
-            if let Some(raw_response) = self.raw_response.get() {
+            if let Some(raw_response) = self.writer() {
                 if !self.flags.get().contains(Flags::SOCKET_CLOSED)
                     && !raw_response.is_closed()
                     && !raw_response.has_fully_drained()
@@ -2043,7 +2161,7 @@ impl NodeHTTPResponse {
 
             Ok(JSValue::js_number_from_uint64(bytes.len() as u64))
         } else {
-            let raw_response = self.raw_response.get().unwrap();
+            let raw_response = self.writer().unwrap();
 
             // Zero-copy path: for writes large enough to spill past the kernel
             // send buffer, hold the user's bytes by reference (pinned
@@ -2160,7 +2278,7 @@ impl NodeHTTPResponse {
             );
             // A corked write reports WantMore and disarms the drain. The uncork can still leave its bytes in the uWS buffer.
             if self.has_unflushed_write() {
-                if let Some(raw_response) = self.raw_response.get() {
+                if let Some(raw_response) = self.writer() {
                     raw_response.on_writable(on_drain_shim, self.as_ctx_ptr());
                 }
             }
@@ -2265,7 +2383,7 @@ impl NodeHTTPResponse {
             value.with_async_context_if_needed(global_object),
         );
         self.armed_this_value.set(this_value);
-        if let Some(raw_response) = self.raw_response.get() {
+        if let Some(raw_response) = self.reader() {
             raw_response.on_data(on_data_shim, self.as_ctx_ptr());
         }
 
@@ -2289,7 +2407,7 @@ impl NodeHTTPResponse {
     ) -> JsResult<JSValue> {
         let flags = self.flags.get();
         if !flags.contains(Flags::UPGRADED) && !self.is_socket_closed_or_closing() {
-            if let Some(raw_response) = self.raw_response.get() {
+            if let Some(raw_response) = self.writer() {
                 raw_response.flush_headers(true);
             }
         }
@@ -2363,7 +2481,7 @@ impl NodeHTTPResponse {
 impl NodeHTTPResponse {
     pub(crate) fn set_timeout(&self, seconds: u8) {
         let flags = self.flags.get();
-        let Some(raw) = self.raw_response.get() else {
+        let Some(raw) = self.writer() else {
             return;
         };
         if flags.contains(Flags::REQUEST_HAS_COMPLETED)
@@ -2422,8 +2540,8 @@ impl NodeHTTPResponse {
         // Keeps the live `m_ctx` heap payload alive across re-entry.
         let _guard = self.ref_guard();
 
-        // Snapshot before re-entry; `raw_response` is `Copy`.
-        let raw_response = this.raw_response.get();
+        // Snapshot before re-entry; the handle is `Copy`.
+        let raw_response = this.writer();
         if let Some(raw_response) = raw_response {
             raw_response.corked(|| {
                 // Capture `this` so a `self`-derived pointer reaches the FFI
@@ -2514,6 +2632,7 @@ pub(crate) unsafe extern "C" fn NodeHTTPResponse__createForJS(
     is_ssl: i32,
     response_ptr: *mut c_void,
     upgrade_ctx: *mut uws_sys::WebSocketUpgradeContext,
+    is_current: bool,
     node_response_ptr: *mut *mut NodeHTTPResponse,
 ) -> JSValue {
     // SAFETY: all pointers are provided by C++ NodeHTTPServer and are live for the call.
@@ -2559,13 +2678,17 @@ pub(crate) unsafe extern "C" fn NodeHTTPResponse__createForJS(
             sec_websocket_extensions: Box::default(),
         }),
         server: any_server_from_packed(any_server_tag),
-        raw_response: Cell::new(Some(raw_response)),
+        connection: connection::Connection::new(raw_response),
         body_read_state: Cell::new(if *has_body {
             BodyReadState::Pending
         } else {
             BodyReadState::None
         }),
-        flags: Cell::new(Flags::default()),
+        flags: Cell::new(if is_current {
+            Flags::default() | Flags::CURRENT
+        } else {
+            Flags::default()
+        }),
         poll_ref: JsCell::new(jsc::Ref::default()),
         body_read_ref: JsCell::new(jsc::Ref::default()),
         promise: JsCell::new(StrongOptional::empty()),

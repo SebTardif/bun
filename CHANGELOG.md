@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Sync upstream through `4b02e1031d6195d96fc0446dfbff49297f89f2d6`, preserving unfinished HTTP aborts and immediate header flushing on the server socket's response ownership contract, promise-aware console writes, and module URL cache identity.
+
 - Preserve zero byte counts and original buffers in filesystem read/write error callbacks so nonblocking WriteStreams can retry EAGAIN. Ports [oven-sh/bun#41440](https://github.com/oven-sh/bun/pull/41440). Thanks @robobun!
 
 - Start TLS reads after adopting paused Duplex and HTTP CONNECT transports, including buffered handshake bytes and pending plaintext acknowledgements.
