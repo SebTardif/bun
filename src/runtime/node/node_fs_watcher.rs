@@ -59,6 +59,8 @@ pub(crate) struct FSWatcher {
     signal: JsCell<Option<AbortSignalRef>>,
     persistent: Cell<bool>,
     path_watcher: Cell<Option<*mut path_watcher::PathWatcher>>,
+    #[cfg(target_os = "macos")]
+    file_watch: JsCell<Option<super::darwin_file_watch::DarwinFileWatch>>,
     poll_ref: JsCell<KeepAlive>,
     global_this: GlobalRef,
     /// JS wrapper object, held weak: the wrapper is rooted by
@@ -222,6 +224,19 @@ impl FSWatchTaskPosix {
             let emitted = match &entry.event {
                 Event::Rename(file_path) => self.ctx().emit::<{ EventType::Rename }>(file_path),
                 Event::Change(file_path) => self.ctx().emit::<{ EventType::Change }>(file_path),
+                #[cfg(target_os = "macos")]
+                Event::FilePoll(kind, path) => {
+                    let result = match kind {
+                        WatchEventKind::Change => self.ctx().emit::<{ EventType::Change }>(path),
+                        WatchEventKind::Rename => self.ctx().emit::<{ EventType::Rename }>(path),
+                    };
+                    if result.is_ok() {
+                        self.ctx().rearm_file_watch();
+                    } else {
+                        self.ctx().close_without_event();
+                    }
+                    result
+                }
                 Event::Error { err, close } => {
                     self.ctx().emit_error(err, *close);
                     Ok(())
@@ -354,6 +369,8 @@ impl WatchEventKind {
 pub(crate) enum Event {
     Rename(EventPathString),
     Change(EventPathString),
+    #[cfg(target_os = "macos")]
+    FilePoll(WatchEventKind, EventPathString),
     Error {
         err: bun_sys::Error,
         close: bool,
@@ -561,6 +578,60 @@ impl FSWatcher {
         unsafe { &*ctx.unwrap().cast::<FSWatcher>() }
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn watch_file(
+        ctx: *mut c_void,
+        file: bun_sys::File,
+        filename: &[u8],
+    ) -> bun_sys::Result<()> {
+        let this = Self::from_ctx(Some(ctx));
+        let owner = bun_io::Owner::new(bun_io::PollTag::FSWatcher, ctx.cast());
+        let watch = super::darwin_file_watch::DarwinFileWatch::new(
+            this.vm_ctx(),
+            owner,
+            file,
+            filename.into(),
+        )?;
+        this.file_watch.set(Some(watch));
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn on_file_poll(&self, flags: u32) {
+        if self.closed.get() {
+            return;
+        }
+        let Some(filename) = self
+            .file_watch
+            .get()
+            .as_ref()
+            .map(|watch| watch.filename.clone())
+        else {
+            return;
+        };
+        // https://github.com/nodejs/node/blob/v24.21.0/deps/uv/src/unix/kqueue.c#L487
+        let kind = if flags & (bun_sys::darwin::NOTE::ATTRIB | bun_sys::darwin::NOTE::EXTEND) != 0 {
+            WatchEventKind::Change
+        } else {
+            WatchEventKind::Rename
+        };
+        let ctx = Some(self.as_ctx_ptr().cast());
+        Self::on_path_update_posix(ctx, Event::FilePoll(kind, filename), true);
+        Self::on_update_end(ctx);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn rearm_file_watch(&self) {
+        let result = self
+            .file_watch
+            .get()
+            .as_ref()
+            .map(|watch| watch.arm(self.vm_ctx()));
+        if let Some(Err(error)) = result {
+            self.emit_error(&error, true);
+        }
+    }
+
     #[cfg(not(windows))]
     pub(crate) fn on_path_update_posix(ctx: Option<*mut c_void>, event: Event, is_file: bool) {
         let this = Self::from_ctx(ctx);
@@ -579,6 +650,10 @@ impl FSWatcher {
                             bstr::BStr::new(value)
                         );
                     }
+                }
+                #[cfg(target_os = "macos")]
+                Event::FilePoll(_, value) => {
+                    bun_core::pretty_errorln!("<r> <d>File changed: {}<r>", bstr::BStr::new(value));
                 }
                 _ => {}
             }
@@ -1100,6 +1175,8 @@ impl FSWatcher {
         let ctx_ptr = self.as_ctx_ptr().cast::<c_void>();
         self.abort_handle.leave();
 
+        #[cfg(target_os = "macos")]
+        drop(self.file_watch.take());
         if let Some(watcher) = self.path_watcher.take() {
             // Both backends expose `detach` as an associated fn over `*mut PathWatcher`
             // (it self-destroys via `heap::take` on the last handler, so it cannot
@@ -1179,6 +1256,8 @@ impl FSWatcher {
             signal: JsCell::new(args.signal.map(|s| s.ref_())),
             persistent: Cell::new(args.persistent),
             path_watcher: Cell::new(None),
+            #[cfg(target_os = "macos")]
+            file_watch: JsCell::new(None),
             global_this: GlobalRef::from(args.global_this),
             js_this: JsCell::new(JsRef::empty()),
             encoding: args.encoding,
@@ -1202,7 +1281,8 @@ impl FSWatcher {
                 // backend dropped the callback parameters — only one valid
                 // value each), so the call is cfg-split.
                 #[cfg(windows)]
-                let r = path_watcher::watch(vm_ref, file_path, args.recursive, ctx as *mut c_void);
+                let r = path_watcher::watch(vm_ref, file_path, args.recursive, ctx as *mut c_void)
+                    .map(Some);
                 #[cfg(not(windows))]
                 let r = path_watcher::watch(
                     vm_ref,
@@ -1213,7 +1293,7 @@ impl FSWatcher {
                     ctx.cast::<c_void>(),
                 );
                 match r {
-                    Ok(r) => Some(r),
+                    Ok(r) => r,
                     Err(err) => {
                         // SAFETY: `ctx` was produced by `heap::into_raw` above and
                         // never handed to a JS wrapper; reclaim ownership.
