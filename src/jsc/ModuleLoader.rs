@@ -170,11 +170,37 @@ extern "C" fn Bun__fetchBuiltinModule(
 ) -> bool {
     jsc::mark_binding();
     // SAFETY: this global owns the live, thread-confined VM. Copy flags so no VM borrow spans a hook.
-    let hooks_active =
-        unsafe { (*jsc_vm).module_hooks_load_count > 0 && !(*jsc_vm).module_hooks_skip };
+    let (hooks_active, native_url) = unsafe {
+        let vm = &*jsc_vm;
+        (
+            vm.module_hooks_load_count > 0 && !vm.module_hooks_skip,
+            crate::node_module_module::module_hooks_native_url(vm, specifier),
+        )
+    };
+    let replacement = if hooks_active || native_url {
+        // SAFETY: the path is live and no VM borrow spans the JS metadata lookup.
+        match unsafe { crate::cpp::Bun__getModuleHooksBuiltin(global_object, specifier) }.and_then(
+            |value| {
+                if value.is_undefined_or_null() {
+                    Ok(None)
+                } else {
+                    value.to_bun_string(global_object).map(Some)
+                }
+            },
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                *ret = ErrorableResolvedSource::err(global_object.take_error(error));
+                return true;
+            }
+        }
+    } else {
+        None
+    };
     let observe_builtin = hooks_active && {
         let name = specifier.to_utf8();
-        name.slice().starts_with(b"node:")
+        replacement.is_some()
+            || name.slice().starts_with(b"node:")
             || (crate::node_module_module::module_hooks_should_intercept(name.slice())
                 && HardcodedModule::HardcodedModule::MAP.contains_key(name.slice()))
     };
@@ -220,8 +246,12 @@ extern "C" fn Bun__fetchBuiltinModule(
             }
         }
     }
-    // SAFETY: the VM remains live, and the user hook has returned before this shared borrow.
-    match __bun_fetch_builtin_module(unsafe { &*jsc_vm }, global_object, specifier) {
+    match __bun_fetch_builtin_module(
+        // SAFETY: the VM remains live, and the user hook has returned before this shared borrow.
+        unsafe { &*jsc_vm },
+        global_object,
+        replacement.as_ref().unwrap_or(specifier),
+    ) {
         Some(resolved) => {
             *ret = ErrorableResolvedSource::ok(resolved);
             true
