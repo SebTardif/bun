@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Dispatch child IPC messages and disconnects through JavaScript `process.emit`, preserving wrappers, accessors, and inherited overrides.
+
+- Synchronize resolver entry-cache snapshots with symlink fills, fd updates, and re-stats, preventing torn path reads during concurrent worker resolution.
 - Implement `node:v8.queryObjects()` with full garbage collection, prototype-chain matching, and count or shallow-summary results for retention diagnostics.
 - Make child stdout/stderr `ref()` and `unref()` idempotent so idle subprocess pipes release parent liveness, and return the stream for chaining. Adapts the return-value fix from [oven-sh/bun#36316](https://github.com/oven-sh/bun/pull/36316). Thanks @robobun!
 - Enable the Node-compatible `module-sync` condition for Bun and Node package resolution while preserving target module kind and export-key precedence. Ports [oven-sh/bun#20770](https://github.com/oven-sh/bun/pull/20770). Thanks @RiskyMH!
@@ -131,3 +134,5 @@
 - Sync upstream through `7a503a7899dcf12186187c38df9f3c96b3ab9ad4`, preserving fork module hooks, plugin import kinds, URL identity, and compatibility patches while adopting resolution-once loading and WebKit `1600131e46b5af48bbda3559af8d8a3327230b6e`.
 
 - Allow package imports to target recognized `bun:` built-ins while retaining Node 24.21 validation for unknown names, other URL schemes, and exports targets.
+
+- Limit the `bun:` package-import exception to scalar targets outside fallback arrays, preserving Node 24.21 array selection and errors for native and captured module loading.
