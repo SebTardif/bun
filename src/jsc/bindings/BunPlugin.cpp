@@ -37,6 +37,8 @@
 
 namespace Zig {
 
+extern "C" void Bun__enableRuntimePluginMissRefresh(JSC::JSGlobalObject* globalObject);
+
 static bool isValidNamespaceString(String& namespaceString)
 {
     static JSC::Yarr::RegularExpression* namespaceRegex = nullptr;
@@ -93,6 +95,7 @@ static JSC::EncodedJSValue jsFunctionAppendOnLoadPluginBody(JSC::JSGlobalObject*
     }
 
     plugin.append(vm, filter->regExp(), func.getObject(), namespaceString);
+    Bun__enableRuntimePluginMissRefresh(defaultGlobalObject(globalObject));
 
     return JSValue::encode(callframe->thisValue());
 }
@@ -208,6 +211,7 @@ static JSC::EncodedJSValue jsFunctionAppendOnResolvePluginBody(JSC::JSGlobalObje
     }
 
     plugin.append(vm, filter->regExp(), uncheckedDowncast<JSObject>(func), namespaceString);
+    Bun__enableRuntimePluginMissRefresh(defaultGlobalObject(globalObject));
 
     return JSValue::encode(callframe->thisValue());
 }

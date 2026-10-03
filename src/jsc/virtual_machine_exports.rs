@@ -177,6 +177,17 @@ pub fn handle_handled_promise(global: &JSGlobalObject, promise: &JSPromise) {
         )));
 }
 
+// HOST_EXPORT(Bun__enableRuntimePluginMissRefresh, c)
+pub fn enable_runtime_plugin_miss_refresh(global: &JSGlobalObject) {
+    // SAFETY: registration runs on the live VM's JS thread; this setter calls no JS.
+    unsafe {
+        (*global.bun_vm_ptr())
+            .transpiler
+            .resolver
+            .refresh_runtime_plugin_misses = true;
+    }
+}
+
 #[cfg(windows)]
 #[unsafe(no_mangle)]
 extern "C" fn Bun__ZigGlobalObject__uvLoop(jsc_vm: &mut VirtualMachine) -> *mut c_void {
