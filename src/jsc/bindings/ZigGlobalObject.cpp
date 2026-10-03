@@ -3586,7 +3586,8 @@ JSC::Identifier GlobalObject::moduleLoaderResolve(JSGlobalObject* jsGlobalObject
         if (moduleName->startsWith("file://"_s)) {
             auto url = WTF::URL(moduleName);
             if (url.isValid() && !url.isEmpty()) {
-                keyString = url.fileSystemPath();
+                // Runtime plugins receive the authored specifier before native URL decoding.
+                keyString = Bun__hasPlugins(globalObject) ? String(moduleName) : url.fileSystemPath();
                 requestedSuffix = fileURLSuffix(url);
                 splitQuery = false;
             } else {
@@ -3776,7 +3777,8 @@ JSC::JSPromise* GlobalObject::moduleLoaderImportModule(JSGlobalObject* jsGlobalO
         if (moduleName.startsWith("file://"_s)) {
             auto url = WTF::URL(moduleName);
             if (url.isValid() && !url.isEmpty()) {
-                moduleName = url.fileSystemPath();
+                if (!Bun__hasPlugins(globalObject))
+                    moduleName = url.fileSystemPath();
                 requestedSuffix = fileURLSuffix(url);
                 splitQuery = false;
             }

@@ -5604,6 +5604,22 @@ impl VirtualMachine {
                 }
             }
         }
+        if mode.is_esm() && specifier.starts_with_ascii(b"file://") {
+            let decoded_specifier = bun_url::path_from_file_url(specifier);
+            let resolved = Self::resolve_without_on_resolve::<IS_A_FILE_PATH>(
+                global,
+                &decoded_specifier,
+                source,
+                None,
+                mode,
+                false,
+                global.bun_vm().transpiler.resolver.opts.global_cache,
+            )?;
+            if let Some(query) = query_string {
+                *query = bun_url::suffix_from_file_url(specifier);
+            }
+            return Ok(resolved);
+        }
         Self::resolve_without_on_resolve::<IS_A_FILE_PATH>(
             global,
             specifier,
@@ -8061,6 +8077,12 @@ fn run_on_resolve(
     let specifier = specifier.to_utf8();
     let Some((namespace, path)) = ModuleLoader::plugin_namespace_and_path(&specifier) else {
         return Ok(None);
+    };
+    // The file namespace keeps the authored URL, as the transpiler callback did.
+    let path = if namespace == b"file" {
+        &specifier[..]
+    } else {
+        path
     };
     let is_file_url = importer.starts_with_ascii(b"file://");
     let decoded_importer;

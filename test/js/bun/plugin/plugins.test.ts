@@ -930,6 +930,61 @@ it.concurrent("dynamic onResolve receives a decoded importer path without URL su
   });
 });
 
+it.concurrent.each([
+  ["static", true],
+  ["static", false],
+  ["dynamic", true],
+  ["dynamic", false],
+] as const)("onResolve preserves authored file URLs for %s imports (redirect: %s)", async (kind, redirect) => {
+  const filename = process.platform === "win32" ? "source #literal.ts" : "source ?#literal.ts";
+  using dir = tempDir("plugin-authored-file-url", {
+    [filename]: "export const value: number = 17;",
+    "first.ts": "export const value: number = 42;",
+    "second.ts": "export const value: number = 43;",
+    "entry.mjs": `
+      import { writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const source = Bun.pathToFileURL(join(import.meta.dir, ${JSON.stringify(filename)})).href + "?query#fragment";
+      const seen = [];
+      Bun.plugin({ name: "authored-file-url", setup(build) {
+        build.onResolve({ filter: /source/, namespace: "file" }, ({ path, kind }) => {
+          seen.push({ path, kind });
+          if (${redirect}) return { path: join(import.meta.dir, seen.length === 1 ? "first.ts" : "second.ts") };
+        });
+      }});
+      const values = [];
+      for (const name of ["generation-one.mjs", "generation-two.mjs"]) {
+        const contents = ${JSON.stringify(kind)} === "static"
+          ? 'export { value } from ' + JSON.stringify(source) + ';'
+          : 'export const value = (await import(' + JSON.stringify(source) + ')).value;';
+        writeFileSync(join(import.meta.dir, name), contents);
+        values.push((await import(join(import.meta.dir, name))).value);
+      }
+      console.log(JSON.stringify({ values, seen: seen.map(item => ({ original: item.path === source, kind: item.kind })) }));
+    `,
+  });
+  await using proc = Bun.spawn({
+    cmd: [bunExe(), "entry.mjs"],
+    cwd: String(dir),
+    env: bunEnv,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect({ stdout, stderr, exitCode }).toEqual({
+    stdout:
+      JSON.stringify({
+        values: redirect ? [42, 43] : [17, 17],
+        seen: Array.from({ length: 2 }, () => ({
+          original: true,
+          kind: kind === "static" ? "import-statement" : "dynamic-import",
+        })),
+      }) + "\n",
+    stderr: "",
+    exitCode: 0,
+  });
+});
+
 it.concurrent("onResolve preserves query and fragment identity in returned file URLs", async () => {
   using dir = tempDir("plugin-onresolve-file-url-identity", {
     "value.mjs": `export const value = {}; export const url = import.meta.url;`,
