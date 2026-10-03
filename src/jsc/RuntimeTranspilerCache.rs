@@ -65,7 +65,8 @@ bun_core::declare_scope!(cache, visible);
 /// the cache-HIT path reinstates #33904 for them.
 /// Version 34: Discard output containing a previous runtime plugin's resolved import paths.
 /// Version 35: Preserve inferred names and inline type-only runtime evaluation edges.
-const EXPECTED_VERSION: u32 = 35;
+/// Version 36: Runtime plugin imports retain their original specifiers and resolve when executed.
+const EXPECTED_VERSION: u32 = 36;
 
 /// Source files smaller than this are not written to / read from the on-disk
 /// transpiler cache. Originally 50 KiB, which excluded almost every file in a

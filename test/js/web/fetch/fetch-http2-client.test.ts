@@ -1703,6 +1703,40 @@ describe.concurrent("fetch() over HTTP/2 (BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP2_CL
       );
     });
 
+    test("a deflate body whose first DATA frame holds one byte is decoded", async () => {
+      const payload = Buffer.alloc(2000, "zlib-wrapped deflate via h2. ").toString();
+      const body = zlib.deflateSync(payload);
+      let first: RawConn | undefined;
+      await withRawH2Server(
+        (conn, id) => {
+          if (!first) {
+            first = conn;
+            // One write, so the client reads HEADERS and the one-byte DATA frame together.
+            conn.socket.write(
+              Buffer.concat([
+                frame(1, 4, id, Buffer.concat([hpackStatus(200), hpackLit("content-encoding", "deflate")])),
+                frame(0, 0, id, body.subarray(0, 1)),
+              ]),
+            );
+          } else {
+            // The client sends this request after the first fetch() resolved: it has the first byte.
+            first.data(1, body.subarray(1), true);
+            conn.headers(id, hpackStatus(204), { endStream: true });
+          }
+        },
+        async url => {
+          await using proc = await spawnFetch(`
+            const tls = { rejectUnauthorized: false };
+            const res = await fetch("${url}", { tls });
+            await fetch("${url}", { tls });
+            process.stdout.write(await res.text());
+          `);
+          const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+          expect({ stdout, stderr, exitCode }).toEqual({ stdout: payload, stderr: "", exitCode: 0 });
+        },
+      );
+    });
+
     test("RST_STREAM(NO_ERROR) before final HEADERS fails the request instead of hanging", async () => {
       await withRawH2Server(
         (conn, id) => {
@@ -1984,7 +2018,10 @@ describe.concurrent("fetch() over HTTP/2 (BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP2_CL
   });
 
   test("protocol:'http2' against an h1-only server fails with HTTP2Unsupported", async () => {
-    const server = https.createServer({ ...tls }, (_req, res) => res.end("h1"));
+    // Complete TLS without ALPN so this reaches HTTP/2 support detection instead of a TLS alert.
+    const server = nodetls.createServer({ ...tls }, socket => {
+      socket.on("data", () => socket.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nh1"));
+    });
     server.listen(0);
     await once(server, "listening");
     const { port } = server.address() as import("node:net").AddressInfo;

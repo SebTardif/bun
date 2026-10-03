@@ -3,6 +3,7 @@ import { bunEnv, bunExe, isASAN, normalizeBunSnapshot, tempDir, tls } from "harn
 import fs from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
+import { mysqlHandshakeV10, mysqlOkPacket, pgAuthenticationOk, pgReadyForQuery } from "../../js/sql/wire-frames";
 
 // Every case spawns at least one full `bun test --isolate` child; the heavy
 // ones (8-file leak fixtures, 500-2000-export module_info modules) exceed the
@@ -353,10 +354,8 @@ describe.concurrent("bun test --isolate", () => {
   });
 
   // https://github.com/oven-sh/bun/issues/33904
-  // The linker rewrites an import that a plugin onResolve answers. When the answer has a
-  // namespace, the printer emits "namespace:path", and the cached module record has to
-  // request that same specifier. "./data.bar?custom" is moved into a namespace by the
-  // plugin. "virt:thing" is already in one in the source.
+  // Cached source keeps the original specifier; each load resolves it through the current plugins.
+  // "./data.bar?custom" moves into a namespace, while "virt:thing" starts in one.
   const pluginNamespaceTestFile = `
     import { test, expect } from "bun:test";
     import direct from "./data.bar?custom";
@@ -446,23 +445,29 @@ describe.concurrent("bun test --isolate", () => {
     expect(exitCode).toBe(0);
   });
 
-  // Only the source-written namespace is cacheable; runtime onResolve answers must be linked afresh.
-  test("with --isolate, the disk cache preserves source namespaces but excludes plugin-rewritten imports", async () => {
+  test("with --isolate, disk-cached imports resolve through the current plugins", async () => {
     using dir = tempDir("isolate-plugin-namespace-disk-cache", {
       ...pluginNamespaceFixture,
       "reexport-clause.ts": `export { named } from "./data.bar?custom";\n//${Buffer.alloc(5 * 1024, "f").toString()}\n`,
       "cache-namespace.ts": `export { named } from "cache-only:stable";\n//${Buffer.alloc(5 * 1024, "f").toString()}\n`,
+      "cache-choice.ts": `export { named } from "cache-choice:current";\n//${Buffer.alloc(5 * 1024, "f").toString()}\n`,
       "plugin.ts": `${pluginNamespaceFixture["plugin.ts"]}
         Bun.plugin({ name: "cache-namespace", setup(build) {
-          build.onLoad({ filter: /.*/, namespace: "cache-only" }, () => ({
-            contents: 'export const named = "CACHED_NAMESPACE";',
+          build.onResolve({ filter: /.*/, namespace: "cache-choice" }, () => ({
+            path: process.env.CACHE_CHOICE,
+            namespace: "cache-only",
+          }));
+          build.onLoad({ filter: /.*/, namespace: "cache-only" }, ({ path }) => ({
+            contents: "export const named = " + JSON.stringify(path === "stable" ? "CACHED_NAMESPACE" : path) + ";",
             loader: "js",
           }));
         }});
       `,
       "a.test.ts": `${pluginNamespaceTestFile}
         import { named as cached } from "./cache-namespace.ts";
+        import { named as choice } from "./cache-choice.ts";
         expect(cached).toBe("CACHED_NAMESPACE");
+        expect(choice).toBe(process.env.CACHE_CHOICE);
       `,
     });
     const cacheDir = join(String(dir), ".cache");
@@ -472,10 +477,13 @@ describe.concurrent("bun test --isolate", () => {
       BUN_DEBUG_ENABLE_RESTORE_FROM_TRANSPILER_CACHE: "1",
     };
     for (const run of ["cold", "warm"]) {
-      const { stderr, exitCode } = await runTests(String(dir), ["--isolate"], ["./a.test.ts", "./b.test.ts"], env);
+      const { stderr, exitCode } = await runTests(String(dir), ["--isolate"], ["./a.test.ts", "./b.test.ts"], {
+        ...env,
+        CACHE_CHOICE: run,
+      });
       expect(normalizeBunSnapshot(stderr, dir), run).toContain("2 pass");
       expect(normalizeBunSnapshot(stderr, dir), run).toContain("0 fail");
-      expect(fs.readdirSync(cacheDir), run).toHaveLength(1);
+      expect(fs.readdirSync(cacheDir), run).toHaveLength(3);
       expect(exitCode, run).toBe(0);
     }
   });
@@ -590,6 +598,116 @@ describe.concurrent("bun test --isolate", () => {
     expect(normalizeBunSnapshot(stderr, dir)).toContain("0 fail");
     expect(exitCode).toBe(0);
   });
+
+  // The dial is still connecting when the swap closes it. Its owner keeps a pointer to the native
+  // socket, and a connection timeout armed, until it hears that the dial failed.
+  const redialWithBunConnect = (hostname: string) => `
+    const dial = (socket: any) => Bun.connect({ hostname: "${hostname}", port, socket: { data() {}, ...socket } });
+    // Every failed dial dials again, and the swap still ends.
+    const redial = () =>
+      dial({ open() { entered("open"); }, connectError() { entered("connectError"); redial(); } }).catch(() => {});
+    await dial({ close: redial });
+  `;
+  const redialWithSQL = (scheme: string) => `
+    const pool = (options = {}) => new Bun.SQL({ url: "${scheme}://u@127.0.0.1:" + port + "/db", max: 1, ...options });
+    const first = pool();
+    await first.connect();
+    // Never answered: rejected when the swap closes its connection.
+    first\`select 1\`.catch(() => pool({ connectionTimeout: timeout / 1000 })\`select 1\`.catch(() => {}));
+  `;
+  // `serve` gets a client as far as connected, and answers nothing after that.
+  test.each([
+    { client: "Bun.connect to an address", serve: undefined, leak: redialWithBunConnect("127.0.0.1") },
+    { client: "Bun.connect to a name", serve: undefined, leak: redialWithBunConnect("localhost") },
+    {
+      client: "RedisClient",
+      serve: (sock: net.Socket) => void sock.once("data", () => sock.write("+OK\r\n")),
+      leak: `
+        const dial = (options = {}) =>
+          new Bun.RedisClient("redis://127.0.0.1:" + port, { autoReconnect: false, ...options });
+        const first = dial();
+        first.onclose = () => {
+          dial({ connectionTimeout: timeout }).connect().catch(() => {});
+        };
+        await first.connect();
+      `,
+    },
+    {
+      client: "Postgres SQL",
+      serve: (sock: net.Socket) =>
+        void sock.once("data", () => sock.write(Buffer.concat([pgAuthenticationOk(), pgReadyForQuery()]))),
+      leak: redialWithSQL("postgres"),
+    },
+    {
+      client: "MySQL SQL",
+      serve: (sock: net.Socket) => {
+        sock.write(mysqlHandshakeV10());
+        // Byte 3 of a packet is its sequence number.
+        sock.on("data", packet => !packet.includes("select 1") && sock.write(mysqlOkPacket(packet[3] + 1)));
+      },
+      leak: redialWithSQL("mysql"),
+    },
+  ])(
+    "with --isolate, what a leaked $client's close handler dials is gone before next file",
+    async ({ serve, leak }) => {
+      const shared = `
+      const port = Number(process.env.PORT!);
+      // Of the dial the close handler makes only: nothing that has to succeed is timed.
+      const timeout = 200;
+    `;
+      using dir = tempDir("isolate-redial", {
+        "a-redial.test.ts": `
+        import { test } from "bun:test";
+        import fs from "node:fs";
+        ${shared}
+        test("leak a client that dials again when it is closed", async () => {
+          const entered = (handler: string) => fs.appendFileSync(process.env.ENTERED_FILE!, handler + "\\n");
+          ${leak}
+        });
+      `,
+        "b-check.test.ts": `
+        import { test, expect } from "bun:test";
+        import fs from "node:fs";
+        ${shared}
+        test("nothing of the previous file acts on this one", async () => {
+          // One of these takes the memory of a native socket the swap freed, so closing that
+          // socket again does not go unnoticed.
+          const junk = Array.from({ length: 1 << 14 }, (_, i) => Buffer.alloc(80, String(i)).toString());
+          // Armed after the leaked client's connection timeout with the same delay, so it fires later.
+          await new Promise(resolve => setTimeout(resolve, timeout));
+          expect(junk).toHaveLength(1 << 14);
+          expect(fs.existsSync(process.env.ENTERED_FILE!)).toBe(false);
+        });
+      `,
+      });
+
+      const server = net.createServer(sock => {
+        sock.on("error", () => {});
+        serve?.(sock);
+      });
+      await new Promise<void>(r => server.listen(0, "127.0.0.1", () => r()));
+
+      try {
+        const { stderr, exitCode } = await runTests(
+          String(dir),
+          ["--isolate"],
+          ["./a-redial.test.ts", "./b-check.test.ts"],
+          {
+            ...bunEnv,
+            PORT: String((server.address() as net.AddressInfo).port),
+            ENTERED_FILE: join(String(dir), "entered.txt"),
+            // A Bun.connect socket has no timer: its finalizer is what closes the native socket again.
+            ...(isASAN && { BUN_DESTRUCT_VM_ON_EXIT: "1" }),
+          },
+        );
+        expect(normalizeBunSnapshot(stderr, dir)).toContain("2 pass");
+        expect(normalizeBunSnapshot(stderr, dir)).toContain("0 fail");
+        expect(exitCode).toBe(0);
+      } finally {
+        server.close();
+      }
+    },
+  );
 
   test("with --isolate, the default DNS resolver answers in every file, not only the first", async () => {
     // The resolver is the VM's, and each file's queries open its channel anew.
