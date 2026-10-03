@@ -985,6 +985,53 @@ it.concurrent.each([
   });
 });
 
+it.concurrent.each(["static", "dynamic"])(
+  "onResolve replaces authored file URL suffixes for %s imports",
+  async kind => {
+    using dir = tempDir("plugin-file-url-redirect-suffix", {
+      "source.mjs": "export const value = {}; export const url = import.meta.url;",
+      "target.mjs": "export const value = {}; export const url = import.meta.url;",
+      "entry.mjs": `
+      import { writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const source = new URL("./source.mjs?original#fragment", import.meta.url).href;
+      const target = new URL("./target.mjs", import.meta.url).href;
+      const suffixes = ["?one#first", "?two#second", ""];
+      const seen = [];
+      Bun.plugin({ name: "redirected-file-url", setup(build) {
+        build.onResolve({ filter: /^file:/, namespace: "file" }, ({ path }) => {
+          seen.push(path);
+          return { path: target + suffixes[seen.length - 1] };
+        });
+      }});
+      const modules = [];
+      for (let index = 0; index < 3; index++) {
+        const file = join(import.meta.dir, "generation-" + index + ".mjs");
+        const contents = ${JSON.stringify(kind)} === "static"
+          ? 'export { value, url } from ' + JSON.stringify(source) + ';'
+          : 'const module = await import(' + JSON.stringify(source) + '); export const value = module.value; export const url = module.url;';
+        writeFileSync(file, contents);
+        modules.push(await import(file));
+      }
+      console.log(JSON.stringify({ distinct: new Set(modules.map(module => module.value)).size, urls: modules.map((module, index) => module.url === target + suffixes[index]), seen: seen.map(path => path === source) }));
+    `,
+    });
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), "entry.mjs"],
+      cwd: String(dir),
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect({ stdout, stderr, exitCode }).toEqual({
+      stdout: '{"distinct":3,"urls":[true,true,true],"seen":[true,true,true]}\n',
+      stderr: "",
+      exitCode: 0,
+    });
+  },
+);
+
 it.concurrent("onResolve preserves query and fragment identity in returned file URLs", async () => {
   using dir = tempDir("plugin-onresolve-file-url-identity", {
     "value.mjs": `export const value = {}; export const url = import.meta.url;`,
