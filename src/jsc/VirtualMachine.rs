@@ -5606,19 +5606,22 @@ impl VirtualMachine {
         }
         if mode.is_esm() && specifier.starts_with_ascii(b"file://") {
             let decoded_specifier = bun_url::path_from_file_url(specifier);
-            let resolved = Self::resolve_without_on_resolve::<IS_A_FILE_PATH>(
-                global,
-                &decoded_specifier,
-                source,
-                None,
-                mode,
-                false,
-                global.bun_vm().transpiler.resolver.opts.global_cache,
-            )?;
-            if let Some(query) = query_string {
-                *query = bun_url::suffix_from_file_url(specifier);
+            // Invalid URLs retain their authored spelling in resolution errors.
+            if !decoded_specifier.is_dead() {
+                let resolved = Self::resolve_without_on_resolve::<IS_A_FILE_PATH>(
+                    global,
+                    &decoded_specifier,
+                    source,
+                    None,
+                    mode,
+                    false,
+                    global.bun_vm().transpiler.resolver.opts.global_cache,
+                )?;
+                if let Some(query) = query_string {
+                    *query = bun_url::suffix_from_file_url(specifier);
+                }
+                return Ok(resolved);
             }
-            return Ok(resolved);
         }
         Self::resolve_without_on_resolve::<IS_A_FILE_PATH>(
             global,

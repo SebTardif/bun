@@ -157,12 +157,25 @@ it("file url in import resolves", async () => {
   expect(stdout.toString("utf8")).toBe("1\n");
 });
 
-it("invalid file url in import throws error", async () => {
-  await using dir = tempDir("fileurl", {});
-  writeFileSync(`${dir}/test.js`, `import {foo} from 'file://\0invalid url';\nconsole.log(foo);`);
+it.each([
+  ["static", false],
+  ["static", true],
+  ["dynamic", false],
+  ["dynamic", true],
+] as const)("invalid file url in %s import throws error (plugins: %s)", async (kind, withPlugin) => {
+  await using dir = tempDir("fileurl", {
+    "preload.js":
+      'Bun.plugin({ name: "delegate", setup(build) { build.onResolve({ filter: /.*/ }, () => undefined); } });',
+  });
+  writeFileSync(
+    `${dir}/test.js`,
+    kind === "static"
+      ? `import {foo} from 'file://\0invalid url';\nconsole.log(foo);`
+      : `const {foo} = await import('file://\0invalid url');\nconsole.log(foo);`,
+  );
 
   const { exitCode, stdout, stderr } = Bun.spawnSync({
-    cmd: [bunExe(), `${dir}/test.js`],
+    cmd: [bunExe(), ...(withPlugin ? ["--preload", `${dir}/preload.js`] : []), `${dir}/test.js`],
     env: bunEnv,
     cwd: import.meta.dir,
   });
