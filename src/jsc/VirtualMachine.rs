@@ -8062,11 +8062,23 @@ fn run_on_resolve(
     let Some((namespace, path)) = ModuleLoader::plugin_namespace_and_path(&specifier) else {
         return Ok(None);
     };
-    // The importer's key ends in the query it was imported with.
+    let is_file_url = importer.starts_with_ascii(b"file://");
+    let decoded_importer;
+    let importer = if is_file_url {
+        decoded_importer = bun_url::path_from_file_url(importer);
+        &decoded_importer
+    } else {
+        importer
+    };
     let importer = importer.to_utf8();
-    let importer = match bun_core::strings::index_of_char_usize(&importer, b'?') {
-        Some(query) => &importer[..query],
-        None => &importer[..],
+    // A decoded URL has no suffix; a literal '?' in its pathname must remain.
+    let importer = if is_file_url {
+        &importer[..]
+    } else {
+        match bun_core::strings::index_of_char_usize(&importer, b'?') {
+            Some(query) => &importer[..query],
+            None => &importer[..],
+        }
     };
     let Some(on_resolve_plugin) = global.run_on_resolve_plugins(
         &bun_core::String::from_bytes(if namespace == b"file" { b"" } else { namespace }),

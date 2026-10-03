@@ -896,6 +896,40 @@ it.concurrent("onResolve can redirect a specifier to a real file in the file nam
   expect(exitCode).toBe(0);
 });
 
+it.concurrent("dynamic onResolve receives a decoded importer path without URL suffixes", async () => {
+  const filename = process.platform === "win32" ? "source #literal.mjs" : "source ?#literal.mjs";
+  using dir = tempDir("plugin-importer-file-url", {
+    [filename]: `export const filename = import.meta.path; export const value = (await import("./value.capture")).default;`,
+    "entry.mjs": `
+      import { join } from "node:path";
+      const seen = [];
+      Bun.plugin({ name: "importer-path", setup(build) {
+        build.onResolve({ filter: /\\.capture$/ }, ({ importer }) => {
+          seen.push(importer);
+          return { path: "value", namespace: "captured" };
+        });
+        build.onLoad({ filter: /.*/, namespace: "captured" }, () => ({ contents: "export default 42;", loader: "js" }));
+      }});
+      const url = Bun.pathToFileURL(join(import.meta.dir, ${JSON.stringify(filename)}));
+      const loaded = await import(url.href + "?query#fragment");
+      console.log(JSON.stringify({ value: loaded.value, importerMatches: seen.map(value => value === loaded.filename) }));
+    `,
+  });
+  await using proc = Bun.spawn({
+    cmd: [bunExe(), "entry.mjs"],
+    cwd: String(dir),
+    env: bunEnv,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect({ stdout, stderr, exitCode }).toEqual({
+    stdout: '{"value":42,"importerMatches":[true]}\n',
+    stderr: "",
+    exitCode: 0,
+  });
+});
+
 it.concurrent("onResolve preserves query and fragment identity in returned file URLs", async () => {
   using dir = tempDir("plugin-onresolve-file-url-identity", {
     "value.mjs": `export const value = {}; export const url = import.meta.url;`,
