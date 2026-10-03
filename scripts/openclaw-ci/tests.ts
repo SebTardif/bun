@@ -45,6 +45,29 @@ export const darwinSmoke = [
   "test/js/node/child_process/child-process-stdio.test.js",
 ];
 
+const webkitSensitive = [
+  "test/js/bun/jsc/webkit-upgrade-7b485a76e9.test.ts",
+  "test/js/bun/jsc/webkit-upgrade-9b02218df6.test.ts",
+  "test/js/bun/jsc/webkit-upgrade-3722912f.test.ts",
+  "test/js/bun/jsc/webkit-upgrade-6b879687ee.test.ts",
+  "test/js/bun/jsc/webkit-upgrade-ccdcb8a026.test.ts",
+  "test/js/bun/jsc/webkit-upgrade-8c4fd56347.test.ts",
+  "test/js/bun/jsc/webkit-upgrade-df289ce551.test.ts",
+  "test/js/bun/jsc/bun-jsc.test.ts",
+  "test/js/web/intl/intl.test.ts",
+  "test/js/node/vm/vm.test.ts",
+  "test/js/node/vm/vm-sourceUrl.test.ts",
+  "test/js/node/vm/script-leak.test.ts",
+  "test/js/node/vm/vm-script-fetcher-leak.test.ts",
+  "test/js/node/vm/sourcetextmodule-leak.test.ts",
+  "test/js/node/vm/sourcetextmodule-link-gc.test.ts",
+  "test/js/node/module/register-hooks-builtin-urls.test.ts",
+  "test/js/node/module/register-hooks-virtual-urls.test.ts",
+  "test/js/bun/plugin/plugin-resolved-key.test.ts",
+  "test/js/bun/plugin/plugins.test.ts",
+  "test/js/node/module/node-module-module.test.js",
+];
+
 // Runtime implementations span JS, Rust and C++; keep their shared boundaries explicit.
 const sourceSuites: [RegExp, string[]][] = [
   [/child_process|subprocess|spawn/i, ["child_process"]],
@@ -66,7 +89,9 @@ export function selectTests(changed: string[], tracked: string[], nightly: boole
   const selected = new Set([...(platform === "darwin" ? darwinSmoke : smoke), ...(nightly ? broader : [])]);
   const tests = tracked.filter(isTest);
   for (const path of changed) {
-    if (isTest(path)) {
+    if (path === "scripts/build/deps/webkit.ts") {
+      webkitSensitive.forEach(test => selected.add(test));
+    } else if (isTest(path)) {
       if (available.has(path)) selected.add(path);
     } else if (path.startsWith("test/")) {
       // A fixture can live one directory below its owning tests.
@@ -89,7 +114,7 @@ export function selectTests(changed: string[], tracked: string[], nightly: boole
     }
   }
   for (const test of selected) {
-    if (!available.has(test)) throw new Error(`Selected test is missing: ${test}; update the smoke list`);
+    if (!available.has(test)) throw new Error(`Selected test is missing: ${test}; update the fixed coverage lists`);
   }
   return [...selected].sort();
 }

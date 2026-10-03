@@ -24,6 +24,18 @@ test("macOS selection includes file, directory, recursive, process and child-pro
   expect(() => selectTests([], tracked, false, "unsupported")).toThrow("Unsupported CI platform");
 });
 
+test.each(["linux", "darwin"])("WebKit updates select VM, Intl, GC, hook and plugin coverage on %s", platform => {
+  const selected = selectTests(["scripts/build/deps/webkit.ts"], tracked, false, platform);
+  expect(selected).toContain("test/js/node/vm/vm.test.ts");
+  expect(selected).toContain("test/js/web/intl/intl.test.ts");
+  expect(selected).toContain("test/js/bun/jsc/bun-jsc.test.ts");
+  expect(selected).toContain("test/js/bun/jsc/webkit-upgrade-7b485a76e9.test.ts");
+  expect(selected).toContain("test/js/node/module/register-hooks-builtin-urls.test.ts");
+  expect(selected).toContain("test/js/node/module/register-hooks-virtual-urls.test.ts");
+  expect(selected).toContain("test/js/bun/plugin/plugin-resolved-key.test.ts");
+  expect(selected).not.toContain("test/bundler/esbuild/default.test.ts");
+});
+
 test("changed tests are added exactly once, renamed tests use the new path, deleted tests are omitted", () => {
   const added = "test/js/node/fs/new check.test.ts";
   const deleted = "test/js/node/fs/removed.test.ts";

@@ -363,6 +363,104 @@ it("import override to bun:test", async () => {
   expect(await import("#bun_test")).toBeDefined();
 });
 
+describe("package imports Bun built-in targets", () => {
+  test.concurrent.each(["bun:test", "bun:sqlite", "bun:jsc"])("loads the recognized target %s", async target => {
+    using dir = tempDir("imports-bun-builtin", {
+      "package.json": JSON.stringify({ imports: { "#builtin": target } }),
+      "entry.mjs": `
+        import { createRequire } from "node:module";
+        const require = createRequire(import.meta.url);
+        const imported = await import("#builtin");
+        const direct = await import(${JSON.stringify(target)});
+        console.log(JSON.stringify({
+          imported: imported === direct,
+          required: require("#builtin") === require(${JSON.stringify(target)}),
+          resolved: require.resolve("#builtin") === ${JSON.stringify(target)},
+        }));
+      `,
+    });
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), "entry.mjs"],
+      cwd: String(dir),
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect({ stdout, stderr, exitCode }).toEqual({
+      stdout: '{"imported":true,"required":true,"resolved":true}\n',
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  test.concurrent.each([
+    "bun:not-a-builtin",
+    "bun:test?query",
+    "bun:test#fragment",
+    "bun:sqlite/extra",
+    "BUN:test",
+    "node:fs",
+    "https://example.invalid/module.js",
+    "file:///not-a-package-target.mjs",
+    "data:text/javascript,export default 1",
+  ])("rejects the URL-shaped imports target %s", async target => {
+    using dir = tempDir("imports-invalid-url-target", {
+      "package.json": JSON.stringify({ imports: { "#target": target } }),
+      "entry.mjs": `
+        import { createRequire } from "node:module";
+        const require = createRequire(import.meta.url);
+        const results = [];
+        for (const load of [() => import("#target"), () => require("#target"), () => require.resolve("#target")]) {
+          try { await load(); results.push("loaded"); } catch (error) { results.push(error.code); }
+        }
+        console.log(JSON.stringify(results));
+      `,
+    });
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), "entry.mjs"],
+      cwd: String(dir),
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect({ stdout, stderr, exitCode }).toEqual({
+      stdout: JSON.stringify(Array(3).fill("ERR_INVALID_PACKAGE_TARGET")) + "\n",
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  test.concurrent("does not allow a Bun built-in as an exports target", async () => {
+    using dir = tempDir("exports-bun-builtin-invalid", {
+      "node_modules/pkg/package.json": JSON.stringify({ name: "pkg", exports: "bun:test" }),
+      "entry.mjs": `
+        import { createRequire } from "node:module";
+        const require = createRequire(import.meta.url);
+        const results = [];
+        for (const load of [() => import("pkg"), () => require("pkg")]) {
+          try { await load(); results.push("loaded"); } catch (error) { results.push(error.code); }
+        }
+        console.log(JSON.stringify(results));
+      `,
+    });
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), "entry.mjs"],
+      cwd: String(dir),
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect({ stdout, stderr, exitCode }).toEqual({
+      stdout: '["ERR_INVALID_PACKAGE_TARGET","ERR_INVALID_PACKAGE_TARGET"]\n',
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+});
+
 it.if(isWindows)("directory cache key computation", () => {
   expect(import(`${process.cwd()}\\\\doesnotexist.ts`)).rejects.toThrow();
   expect(import(`${process.cwd()}\\\\\\doesnotexist.ts`)).rejects.toThrow();
@@ -2011,3 +2109,29 @@ describe.concurrent("dot specifiers resolve to the directory index, not a siblin
     expect(exitCode).toBe(1);
   });
 });
+
+// On Windows these are not how the resolver spells the path, and it was asked again about its own spelling.
+test.concurrent.each(["import", "require"])(
+  "%s() of a file written after its directory was read, by an absolute path with forward slashes",
+  async load => {
+    using dir = tempDir("resolve-written-later", {
+      "src/entry.mjs": `
+        import { writeFileSync } from "node:fs";
+        import { basename, dirname, join } from "node:path";
+        writeFileSync(join(import.meta.dir, "later.mjs"), "export default import.meta.path;");
+        const root = dirname(import.meta.dir);
+        for (const path of [root + "/src/later.mjs", (root + "/src/later.mjs").replaceAll("\\\\", "/")])
+          console.log(basename((await ${load}(path)).default));
+      `,
+    });
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), "src/entry.mjs"],
+      cwd: String(dir),
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect({ stdout, stderr, exitCode }).toEqual({ stdout: "later.mjs\nlater.mjs\n", stderr: "", exitCode: 0 });
+  },
+);

@@ -127,3 +127,7 @@
 - Match Node 24.21 package metadata validation during import and require, preserve lazy scope/condition checks and ignored fields, reject unreadable selected metadata, and retain CommonJS parent paths in resolution diagnostics. Adapts [oven-sh/bun#33890](https://github.com/oven-sh/bun/pull/33890) and [oven-sh/bun#35711](https://github.com/oven-sh/bun/pull/35711). Thanks @robobun and @cirospaciari!
 
 - Preserve Node's deferred JSON diagnostics for both package maps and accept JSON-encoded maps in string fields.
+
+- Sync upstream through `7a503a7899dcf12186187c38df9f3c96b3ab9ad4`, preserving fork module hooks, plugin import kinds, URL identity, and compatibility patches while adopting resolution-once loading and WebKit `1600131e46b5af48bbda3559af8d8a3327230b6e`.
+
+- Allow package imports to target recognized `bun:` built-ins while retaining Node 24.21 validation for unknown names, other URL schemes, and exports targets.
