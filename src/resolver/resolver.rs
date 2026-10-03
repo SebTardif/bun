@@ -491,6 +491,8 @@ pub struct Resolver<'a> {
     pub generation: Generation,
     /// Hook-created dependency directories outlive deregistration.
     pub runtime_mutable_directories: bool,
+    /// Plugin-created files outlive hooks, but successful lookups keep their cache policy.
+    pub refresh_runtime_plugin_misses: bool,
     /// Node package lookup for hook URLs must ignore even already-cached tsconfig aliases.
     pub ignore_tsconfig_paths: bool,
 
@@ -632,6 +634,7 @@ impl<'a> Resolver<'a> {
             caches: CacheSet::init(),
             generation: from.generation,
             runtime_mutable_directories: false,
+            refresh_runtime_plugin_misses: false,
             ignore_tsconfig_paths: false,
             package_manager: from.package_manager,
             on_wake_package_manager: from.on_wake_package_manager,
@@ -935,6 +938,7 @@ impl<'a> Resolver<'a> {
             watcher: None,
             generation: 0,
             runtime_mutable_directories: false,
+            refresh_runtime_plugin_misses: false,
             ignore_tsconfig_paths: false,
             package_manager: None,
             on_wake_package_manager: Default::default(),
@@ -1468,7 +1472,22 @@ impl<'a> Resolver<'a> {
             }
             ResultUnion::NotFound => {
                 let _ = self.flush_debug_logs(FlushMode::Fail);
-                ResultUnion::NotFound
+                if self.refresh_runtime_plugin_misses
+                    && !self.runtime_mutable_directories
+                    && self
+                        .node_module_error
+                        .as_ref()
+                        .is_none_or(|error| !error.is_fatal())
+                {
+                    self.retry_runtime_plugin_miss(
+                        source_dir_normalized,
+                        import_path,
+                        kind,
+                        global_cache,
+                    )
+                } else {
+                    ResultUnion::NotFound
+                }
             }
         };
 
@@ -4063,7 +4082,6 @@ impl<'a> Resolver<'a> {
 
                         if self.probe_target_extensions(
                             resolved_dir_info,
-                            dirname_fd,
                             package_json,
                             base,
                             extension_order,
@@ -4085,7 +4103,6 @@ impl<'a> Resolver<'a> {
                     if ends_with_star
                         && self.probe_target_extensions(
                             resolved_dir_info,
-                            dirname_fd,
                             package_json,
                             base,
                             extension_order,
@@ -4211,7 +4228,6 @@ impl<'a> Resolver<'a> {
     fn probe_target_extensions(
         &mut self,
         resolved_dir_info: DirInfoRef,
-        dirname_fd: FD,
         package_json: &PackageJSON,
         base: &[u8],
         extension_order: options::ExtOrder,
@@ -4223,12 +4239,13 @@ impl<'a> Resolver<'a> {
         if is_wildcard && bun_paths::extension(base).is_empty() {
             let buf = bufs!(load_as_file);
             buf[..base.len()].copy_from_slice(base);
-            for ext in self.opts.ext_order_slice(extension_order).iter() {
-                let ext: &[u8] = ext;
+            for i in 0..self.opts.ext_order_slice(extension_order).len() {
+                let ext = bun_ptr::RawSlice::new(&*self.opts.ext_order_slice(extension_order)[i]);
+                let ext: &[u8] = &ext;
                 let file_name = &mut buf[0..base.len() + ext.len()];
                 file_name[base.len()..].copy_from_slice(ext);
-                if let Some(ext_query) =
-                    resolved_dir_info.get_entry(self.generation, &file_name[..])
+                if let Some((Some(ext_query), dirname_fd)) =
+                    self.lookup_directory_entry(resolved_dir_info, file_name)
                 {
                     // SAFETY: rfs points at the process-global RealFS; the lazy-stat
                     // rewrite inside `kind()` is serialized on the per-entry mutex.
@@ -4268,8 +4285,8 @@ impl<'a> Resolver<'a> {
                 for &replacement in ts_exts.iter() {
                     let file_name = &mut buf[0..segment.len() + replacement.len()];
                     file_name[segment.len()..].copy_from_slice(replacement);
-                    if let Some(ts_query) =
-                        resolved_dir_info.get_entry(self.generation, &file_name[..])
+                    if let Some((Some(ts_query), dirname_fd)) =
+                        self.lookup_directory_entry(resolved_dir_info, file_name)
                     {
                         // SAFETY: rfs points at the process-global RealFS; the lazy-stat
                         // rewrite inside `kind()` is serialized on the per-entry mutex.
@@ -5731,26 +5748,13 @@ impl<'a> Resolver<'a> {
         base[0..b"index".len()].copy_from_slice(b"index");
         base[b"index".len()..].copy_from_slice(ext);
 
-        // Lookup + listing fd in one critical section (see `DirInfo::get_entry`
-        // for the rewrite this guards against); the fd gate matches
-        // `DirInfo::get_file_descriptor`.
-        let looked_up = {
-            let realfs = &mut Fs::FileSystem::instance().fs;
-            let _entries_lock = realfs.entries_mutex.lock_guard();
-            dir_info
-                .get_entries_ref_locked(self.generation)
-                .map(|entries| {
-                    (
-                        entries.get(&base[..]),
-                        if FeatureFlags::STORE_FILE_DESCRIPTORS {
-                            entries.fd
-                        } else {
-                            FD::INVALID
-                        },
-                    )
-                })
-        };
+        let looked_up = self.lookup_directory_entry(dir_info, base);
         if let Some((Some(lookup), dirname_fd)) = looked_up {
+            let dirname_fd = if FeatureFlags::STORE_FILE_DESCRIPTORS {
+                dirname_fd
+            } else {
+                FD::INVALID
+            };
             // SAFETY: rfs points at the process-global RealFS; the lazy-stat
             // rewrite inside `kind()` is serialized on the per-entry mutex.
             if unsafe { lookup.entry().kind(rfs, self.store_fd) }
@@ -6172,6 +6176,57 @@ impl<'a> Resolver<'a> {
         dec_ret!(MatchStatus::NotFound);
     }
 
+    #[cold]
+    fn retry_runtime_plugin_miss(
+        &mut self,
+        source_dir: &[u8],
+        import_path: &'static [u8],
+        kind: ast::ImportKind,
+        global_cache: GlobalCache,
+    ) -> ResultUnion {
+        // Recheck plugin-created files only after the cached resolution misses.
+        self.runtime_mutable_directories = true;
+        let mut resolver = scopeguard::guard(self, |resolver| {
+            resolver.runtime_mutable_directories = false;
+        });
+        resolver.resolve_and_auto_install(source_dir, import_path, kind, global_cache)
+    }
+
+    #[inline]
+    fn lookup_directory_entry(
+        &mut self,
+        dir_info: DirInfoRef,
+        name: &[u8],
+    ) -> Option<(Option<crate::fs::EntryLookup<'static>>, FD)> {
+        let generation = self.generation;
+        // Entry and listing fd must come from the same locked directory snapshot.
+        let lookup = || {
+            let rfs = &mut Fs::FileSystem::instance().fs;
+            let _entries_lock = rfs.entries_mutex.lock_guard();
+            dir_info
+                .get_entries_ref_locked(generation)
+                .map(|entries| (entries.get(name), entries.fd))
+        };
+        let mut result = lookup();
+        if result.as_ref().is_none_or(|(entry, _)| entry.is_none())
+            && self.refresh_created_file_in_directory(dir_info.abs_path, name)
+        {
+            result = lookup();
+        }
+        result
+    }
+
+    fn refresh_created_file_in_directory(&mut self, dir: &[u8], name: &[u8]) -> bool {
+        if !self.runtime_mutable_directories {
+            return false;
+        }
+        let mut buffer = bun_paths::path_buffer_pool::get();
+        let Some(path) = self.fs_ref().abs_buf_checked(&[dir, name], &mut buffer) else {
+            return false;
+        };
+        self.refresh_created_file(path)
+    }
+
     fn refresh_created_file(&mut self, path: &[u8]) -> bool {
         if !self.runtime_mutable_directories {
             return false;
@@ -6343,7 +6398,12 @@ impl<'a> Resolver<'a> {
                     let buffer = &mut tail[0..segment.len() + ext_to_replace.len()];
                     buffer[segment.len()..].copy_from_slice(ext_to_replace);
 
-                    let (ts_query, ts_dirname_fd) = dir_entry.get().lookup(&buffer[..]);
+                    let (mut ts_query, mut ts_dirname_fd) = dir_entry.get().lookup(&buffer[..]);
+                    if ts_query.is_none()
+                        && self.refresh_created_file_in_directory(dir_path, buffer)
+                    {
+                        (ts_query, ts_dirname_fd) = dir_entry.get().lookup(&buffer[..]);
+                    }
                     if let Some(query) = ts_query {
                         // SAFETY: rfs points at the process-global RealFS; the lazy-stat
                         // rewrite inside `kind()` is serialized on the per-entry mutex.
