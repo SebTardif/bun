@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve package-scope CommonJS interop in async imports without replacing the file's parser format. Adapts [oven-sh/bun#40940](https://github.com/oven-sh/bun/pull/40940). Thanks @robobun!
+
 - Align WebKit and VM source-position assertions with Node's constructor locations and select these regressions for native stack-formatting changes in both fork CI lanes.
 
 - Preserve the native-context count in the fast `v8.getHeapStatistics()` adapter and avoid appending a second strict code-generation flag to inherited worker arguments.
