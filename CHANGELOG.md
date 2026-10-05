@@ -183,3 +183,6 @@
 - Fix Intl.Segments.containing() at both halves of surrogate pairs with the pinned OpenClaw WebKit; cover grapheme, word, and sentence boundaries in both lookup directions. Ports [oven-sh/WebKit#753](https://github.com/oven-sh/WebKit/pull/753). Thanks @robobun!
 
 - Reduce kernel CPU during cold module imports on macOS by serializing transpiler-cache writes while preserving parallel parsing and cache reads.
+
+- Keep ESM namespaces free of inherited `__esModule` markers and preserve the own marker and live exports for `require(esm)`, fixing Vite/tsx namespace interop. Adapts [oven-sh/bun#33894](https://github.com/oven-sh/bun/pull/33894) and [oven-sh/WebKit#279](https://github.com/oven-sh/WebKit/pull/279). Thanks @robobun!
+
