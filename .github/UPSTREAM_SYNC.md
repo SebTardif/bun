@@ -93,7 +93,7 @@ release target as a dry run; the release cadence and security-patch policy are i
 
 ## October 2026 engine and namespace update
 
-The sync through upstream Bun `c7b06d94bac19817ba34b6677bb1099fb4f6d2be`
+The sync through upstream Bun `d4928764f23213ecf3cd61fa0b5b4a44369a5096`
 targets upstream WebKit `5718a6ec579b98362ea7276a426deedcc6281ef5`. The fork
 consumes immutable OpenClaw WebKit
 [`42ab38d705d4838748ccee77e7deb0e4e35515ee`](https://github.com/openclaw/WebKit/releases/tag/autobuild-42ab38d705d4838748ccee77e7deb0e4e35515ee)
