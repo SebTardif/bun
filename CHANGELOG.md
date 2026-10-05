@@ -193,3 +193,4 @@
 - Preserve package-scope CommonJS interop in async imports without replacing the file's parser format. Adapts [oven-sh/bun#40940](https://github.com/oven-sh/bun/pull/40940). Thanks @robobun!
 
 - Sync upstream nightly through `d4928764f23213ecf3cd61fa0b5b4a44369a5096`, configuring fetch TLS once per connection so pooled sockets can be reused during renegotiation without repeating session setup.
+- Sync upstream nightly through `9bd19c98eacc01530a4e7609bc427abffa87d77e`, preserving PostgreSQL query ordering through errors and limiting MySQL row-decoding failures to the affected query.
