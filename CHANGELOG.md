@@ -212,3 +212,5 @@
 - Publish Darwin/Linux prereleases while Windows signing is unconfigured; require an explicit signed-Windows release switch before including either Windows architecture, while preserving test-only Windows CI.
 
 - Avoid requesting executable access when renaming files on Windows, preventing unnecessary synchronous antivirus scans during compile-cache publication.
+
+- Check live `vm.Script` counts and full-workload RSS growth after warmup in the leak regression, preserving the 200 MiB release and 700 MiB ASAN RSS limits. Adapts [oven-sh/bun#42474](https://github.com/oven-sh/bun/pull/42474); thanks @robobun!
