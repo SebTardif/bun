@@ -220,3 +220,5 @@
 - Keep external URL resolution out of filesystem package validation, including protocol-relative specifiers on Windows.
 
 - Load CommonJS native addons through Windows namespaced paths so long installation paths work with addon activation contexts, while preserving module cache keys and embedded-addon extraction.
+
+- Resolve Windows namespaced CommonJS paths without treating the device prefix as a query, preserving Node's distinct cache keys and native-addon loading.
