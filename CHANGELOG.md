@@ -216,3 +216,5 @@
 - Check live `vm.Script` counts and full-workload RSS growth after warmup in the leak regression, preserving the 200 MiB release and 700 MiB ASAN RSS limits. Adapts [oven-sh/bun#42474](https://github.com/oven-sh/bun/pull/42474); thanks @robobun!
 
 - Keep detached `import.meta.resolve` functions bound to their originating module on every platform, including Windows, with Node-compatible writable resolver properties.
+
+- Keep external URL resolution out of filesystem package validation, including protocol-relative specifiers on Windows.
