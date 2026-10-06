@@ -218,3 +218,5 @@
 - Keep detached `import.meta.resolve` functions bound to their originating module on every platform, including Windows, with Node-compatible writable resolver properties.
 
 - Keep external URL resolution out of filesystem package validation, including protocol-relative specifiers on Windows.
+
+- Load CommonJS native addons through Windows namespaced paths so long installation paths work with addon activation contexts, while preserving module cache keys and embedded-addon extraction.
