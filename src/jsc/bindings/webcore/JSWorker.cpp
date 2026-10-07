@@ -740,7 +740,9 @@ JSC_DEFINE_CUSTOM_GETTER(jsWorker_resourceLimitsGetter, (JSGlobalObject * lexica
     if (worker.hasExited() || worker.contextProxy().options().kind != WorkerOptions::Kind::Node)
         return JSValue::encode(constructEmptyObject(lexicalGlobalObject));
     auto limits = worker.contextProxy().options().resourceLimits;
-    return JSValue::encode(createResourceLimitsObject(lexicalGlobalObject, worker.contextProxy().resourceLimitsReady() ? limits.resolved() : limits));
+    // resolved() is what the heap observer installs. Publishing the raw
+    // sentinels before that GC reports -1 for limits the caller did not set.
+    return JSValue::encode(createResourceLimitsObject(lexicalGlobalObject, limits.resolved()));
 }
 
 /* Hash table for prototype */

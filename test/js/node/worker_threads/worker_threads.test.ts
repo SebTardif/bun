@@ -96,6 +96,29 @@ test("hrtime, uptime, Bun.nanoseconds and performance share the parent's origin"
   }
 });
 
+test("resourceLimits is resolved before the worker is online", async () => {
+  const worker = new Worker("setInterval(() => {}, 1000)", { eval: true });
+  try {
+    const limits = worker.resourceLimits;
+    expect(limits.maxOldGenerationSizeMb).toBe(4096);
+    expect(limits.maxYoungGenerationSizeMb).toBe(192);
+    expect(limits.codeRangeSizeMb).toBe(0);
+    expect(limits.stackSizeMb).toBe(4);
+    const capped = new Worker("setInterval(() => {}, 1000)", {
+      eval: true,
+      resourceLimits: { maxOldGenerationSizeMb: 64 },
+    });
+    try {
+      expect(capped.resourceLimits.maxOldGenerationSizeMb).toBe(64);
+      expect(capped.resourceLimits.maxYoungGenerationSizeMb).toBe(192);
+    } finally {
+      await capped.terminate();
+    }
+  } finally {
+    await worker.terminate();
+  }
+});
+
 test("all worker_threads module properties are present", () => {
   expect(wt).toHaveProperty("getEnvironmentData");
   expect(wt).toHaveProperty("isMainThread");
