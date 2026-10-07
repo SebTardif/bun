@@ -289,7 +289,18 @@ impl SSLConfigFromJs for SSLConfig {
         let protocols: *const c_char = match &generated.alpn_protocols {
             jsc::generated::SSLConfigAlpnProtocols::None => core::ptr::null(),
             jsc::generated::SSLConfigAlpnProtocols::String(val) => {
-                zbox_into_raw(&val.as_ref().to_owned_slice_z())
+                // A JS string is one protocol name. OpenSSL's list is
+                // length-prefixed, so the raw characters fail that check.
+                let name = val.as_ref().to_owned_slice_z();
+                let bytes = name.as_bytes();
+                if bytes.is_empty() || bytes.len() > 255 {
+                    zbox_into_raw(&name)
+                } else {
+                    let mut wire = Vec::with_capacity(bytes.len() + 1);
+                    wire.push(bytes.len() as u8);
+                    wire.extend_from_slice(bytes);
+                    dupe_z(&wire)
+                }
             }
             jsc::generated::SSLConfigAlpnProtocols::Buffer(val) => {
                 // SAFETY: `val.get()` returns a non-null `*mut JSCArrayBuffer`
