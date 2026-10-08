@@ -96,29 +96,6 @@ test("hrtime, uptime, Bun.nanoseconds and performance share the parent's origin"
   }
 });
 
-test("resourceLimits is resolved before the worker is online", async () => {
-  const worker = new Worker("setInterval(() => {}, 1000)", { eval: true });
-  try {
-    const limits = worker.resourceLimits;
-    expect(limits.maxOldGenerationSizeMb).toBe(4096);
-    expect(limits.maxYoungGenerationSizeMb).toBe(192);
-    expect(limits.codeRangeSizeMb).toBe(0);
-    expect(limits.stackSizeMb).toBe(4);
-    const capped = new Worker("setInterval(() => {}, 1000)", {
-      eval: true,
-      resourceLimits: { maxOldGenerationSizeMb: 64 },
-    });
-    try {
-      expect(capped.resourceLimits.maxOldGenerationSizeMb).toBe(64);
-      expect(capped.resourceLimits.maxYoungGenerationSizeMb).toBe(192);
-    } finally {
-      await capped.terminate();
-    }
-  } finally {
-    await worker.terminate();
-  }
-});
-
 test("all worker_threads module properties are present", () => {
   expect(wt).toHaveProperty("getEnvironmentData");
   expect(wt).toHaveProperty("isMainThread");
@@ -4233,6 +4210,53 @@ describe("inherited NODE_OPTIONS errors", () => {
 });
 
 describe("resourceLimits", () => {
+  test("unspecified limits stay at the sentinel until the worker is ready", async () => {
+    const worker = new Worker("setInterval(() => {}, 1000)", { eval: true });
+    try {
+      expect(worker.resourceLimits).toEqual({
+        maxYoungGenerationSizeMb: -1,
+        maxOldGenerationSizeMb: -1,
+        codeRangeSizeMb: -1,
+        stackSizeMb: 4,
+      });
+      await once(worker, "online");
+      const online = worker.resourceLimits;
+      expect(online.maxYoungGenerationSizeMb).not.toBe(-1);
+      expect(online.maxOldGenerationSizeMb).not.toBe(-1);
+      expect(online.codeRangeSizeMb).not.toBe(-1);
+      expect(online.stackSizeMb).toBe(4);
+    } finally {
+      await worker.terminate();
+      expect(worker.resourceLimits).toEqual({});
+    }
+  });
+
+  test("explicit resource limits are visible before the worker is online", async () => {
+    const requested = {
+      maxYoungGenerationSizeMb: 8,
+      maxOldGenerationSizeMb: 64,
+      codeRangeSizeMb: 16,
+      stackSizeMb: 2,
+    };
+    const worker = new Worker("setInterval(() => {}, 1000)", { eval: true, resourceLimits: requested });
+    const partial = new Worker("setInterval(() => {}, 1000)", {
+      eval: true,
+      resourceLimits: { maxOldGenerationSizeMb: 64 },
+    });
+    try {
+      expect(worker.resourceLimits).toEqual(requested);
+      expect(partial.resourceLimits).toEqual({
+        maxYoungGenerationSizeMb: -1,
+        maxOldGenerationSizeMb: 64,
+        codeRangeSizeMb: -1,
+        stackSizeMb: 4,
+      });
+    } finally {
+      await partial.terminate();
+      await worker.terminate();
+    }
+  });
+
   test("reads numeric getters in Node order and converts the second value", async () => {
     const calls: string[] = [];
     const values = { maxOldGenerationSizeMb: 64, maxYoungGenerationSizeMb: 16, codeRangeSizeMb: 32, stackSizeMb: 2 };
