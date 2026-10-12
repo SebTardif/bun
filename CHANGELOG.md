@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Drain queued Worker stdout and stderr before emitting `exit`, preserving output when a synchronous worker exit races the parent's stdio setup.
+
+- Avoid an extra tracing collection when destroying Workers while preserving native-resource finalizers and the mandatory final heap sweep.
+
+- Release each Worker thread's event-name cache after VM teardown, preventing native memory growth during repeated Worker creation. Ports [oven-sh/bun#38164](https://github.com/oven-sh/bun/pull/38164); thanks @robobun!
+
+- Release process stdio polling registrations between isolated test files so Linux parallel test runs can initialize stdout and stderr in each file. Adapts oven-sh/bun#38008 to the fork's borrowed stdio descriptors.
+
+- Publish ready POSIX subprocess exits and drain their owned pipes before stalled-host retirement observers, without changing the global event-loop phase order; wait for extra stdio pipes before emitting child `close`.
+
+- Enforce `--max-old-space-size` and its `NODE_OPTIONS` form through the pinned WebKit heap limits, with Node-compatible command-line precedence, child-process inheritance, and worker-scoped heap exhaustion.
+
+- Release retained heap-snapshot metadata when a local inspector Session disables `HeapProfiler` or disconnects, including sessions that never enabled the domain.
+
 - Follow directory symlinks in Windows asynchronous recursive `fs.readdir` callback results and promise string results while preserving promise Dirent traversal boundaries.
 
 - Keep Windows stdio EOF tests aligned with Node's retained pipe handles, allow an explicit host Node version for compatibility qualification, and preserve the host identity in TLS session-reuse fixtures.
@@ -238,3 +252,22 @@
 - Wake idle event loops when the engine schedules immediate garbage-collection work, including requests from collector threads, without extending worker lifetime.
 
 - Update the ten checksum-pinned [OpenClaw WebKit archives](https://github.com/openclaw/WebKit/releases/tag/autobuild-cb8d6f202b5a396caa204ee1bb75d78175aa841a) for passive-collector wakeups and budgeted-worker collection cadence, preserving full-GC heap-limit confirmation and the immediate-timer companion.
+
+- Avoid eager full bytecode generation on live `node:vm` cache hits while retaining post-GC promotion for payloads missing function bodies, preserving the cache budget and public cached-data generation.
+
+- Return integral byte sizes in `node:inspector` heap allocation profiles while preserving allocation-site sampling and independent node/sample estimates.
+- Share exact owned source buffers on matching `node:vm` compilation-cache entries while preserving cold misses, cached-data validation, per-script origins and the existing byte budget.
+
+- Name package-target resolution options explicitly to satisfy the Rust Mordant lint without changing resolution behavior.
+
+- Destroy Duplex-backed TLS transports without calling `end()`, preserve wrapped-socket close ordering, and honor half-open shutdown like Node.js. Ports HTTP/2 teardown from [oven-sh/bun#38195](https://github.com/oven-sh/bun/pull/38195) and adapts coverage from [oven-sh/bun#38154](https://github.com/oven-sh/bun/pull/38154); thanks @robobun!
+
+- Verify dead-realm FinalizationRegistry cancellation only after observing collection, while requiring a collected realm and preserving zero callbacks for every collected context. Adapts [oven-sh/bun#44544](https://github.com/oven-sh/bun/pull/44544); thanks @robobun!
+
+- Run external-value and added Node-API finalizers at environment teardown, preserve nullable-env external-string finalization, and copy addon-owned string storage before sharing it across workers. Adapts [oven-sh/bun#32912](https://github.com/oven-sh/bun/pull/32912); thanks @robobun!
+
+- Observe deferred HTTP/2 session errors in the async-context fixture while preserving frame-clearing and clean-exit checks.
+
+- Update the ten checksum-pinned [OpenClaw WebKit archives](https://github.com/openclaw/WebKit/releases/tag/autobuild-01f208ae7a87661e7503f514c946a37bc76ad1d1) to prevent stale VM entry storage from retaining unreachable objects and fix Linux Worker termination deadlocks during foreign-stack native calls. The storage fix builds on oven-sh/WebKit#694; thanks @robobun.
+
+- Measure CPU profile duration across the full capture, including idle time, and capture the inspector startup stack synchronously like Node.js.

@@ -670,6 +670,12 @@ export const structuredCloneAdvanced: (
 
 export const isASANEnabled: () => boolean = $newCppFunction("InternalForTesting.cpp", "jsFunction_isASANEnabled", 0);
 
+export const BunString_crossThreadCopyBytes: (value: string, unrelatedExternal?: boolean) => number = $newCppFunction(
+  "InternalForTesting.cpp",
+  "jsFunction_BunString_crossThreadCopyBytes",
+  2,
+);
+
 export const BunString_threadIsolatedCopyRefCountDelta: () => number = $newCppFunction(
   "InternalForTesting.cpp",
   "jsFunction_BunString_threadIsolatedCopyRefCountDelta",
@@ -843,6 +849,13 @@ export const proxyInternals = {
 
 export const fileSinkInternals = {
   liveCount: $newRustFunction("runtime/webcore/FileSink.rs", "TestingAPIs.fileSinkLiveCount", 0) as () => number,
+  stdioSink(fd: 1 | 2): Bun.FileSink {
+    const { kWriteStreamFastPath } = require("internal/fs/streams");
+    return (fd === 1 ? process.stdout : process.stderr)[kWriteStreamFastPath];
+  },
+  expectStdioTeardown: $newRustFunction("runtime/webcore/FileSink.rs", "TestingAPIs.expectStdioTeardown", 1) as (
+    sink: Bun.FileSink,
+  ) => void,
 };
 
 export const byteStreamInternals = {
@@ -868,6 +881,12 @@ export const sourceHasLineStarts: (fn: Function) => boolean = $newCppFunction(
   "ZigSourceProvider.cpp",
   "jsSourceHasLineStarts",
   1,
+);
+
+export const sourcesShareBackingStore: (first: Function, second: Function) => boolean | undefined = $newCppFunction(
+  "ZigSourceProvider.cpp",
+  "jsSourcesShareBackingStore",
+  2,
 );
 
 // The bytecode `bun build --compile --bytecode` embeds for a builtin module, plus the external string table it embeds

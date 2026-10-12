@@ -3,6 +3,144 @@ import { bunEnv, bunExe, tempDir } from "harness";
 import inspector from "node:inspector";
 import inspectorPromises from "node:inspector/promises";
 
+const profileDurationFixture = (mode: "idle" | "busy") => `
+import assert from 'node:assert/strict';
+import { Session, url } from 'node:inspector/promises';
+import { setTimeout as delay } from 'node:timers/promises';
+const mode = ${JSON.stringify(mode)};
+const session = new Session();
+session.connect();
+try {
+  await session.post('Profiler.enable');
+  await session.post('Profiler.setSamplingInterval', { interval: mode === 'idle' ? 1000000000 : 1000 });
+  let previousEnd = 0;
+  for (let iteration = 0; iteration < 3; iteration++) {
+    function beginCapture() { return { result: session.post('Profiler.start') }; }
+    const before = performance.now();
+    await beginCapture().result;
+    const started = performance.now();
+    if (mode === 'busy') {
+      function work() { let x=0; for (let i=0;i<10000;i++) x += Math.sqrt(i); return x; }
+      while (performance.now() - started < 30) work();
+    }
+    // Elapsed idle time is the behavior under test; no readiness event represents it.
+    await delay(25);
+    const stopping = performance.now();
+    const { profile } = await session.post('Profiler.stop');
+    const stopped = performance.now();
+    const actual = (profile.endTime - profile.startTime) / 1000;
+    assert.ok(actual > 0, JSON.stringify(profile));
+    assert.ok(actual >= stopping - started - 0.001, "capture omitted idle time: " + actual);
+    assert.ok(actual <= stopped - before + 0.001, "capture exceeds elapsed time: " + actual);
+    assert.ok(profile.startTime >= previousEnd);
+    previousEnd = profile.endTime;
+    assert.ok(profile.samples.length > 0);
+    assert.equal(profile.samples.length, profile.timeDeltas.length);
+    assert.ok(profile.timeDeltas.every(d => Number.isFinite(d) && d >= 0));
+    const ids = new Set(profile.nodes.map(n => n.id));
+    assert.ok(profile.samples.every(id => ids.has(id)));
+    assert.ok(profile.nodes.some(n => n.callFrame.functionName === 'beginCapture'));
+    assert.equal(url(), undefined);
+  }
+  await session.post('Profiler.disable');
+} finally { session.disconnect(); }
+console.log('ok');
+`;
+
+const heapSnapshotCleanupFixture = `
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { Session } from 'node:inspector/promises';
+import { Session as CallbackSession } from 'node:inspector';
+import path from 'node:path';
+import { writeHeapSnapshot } from 'node:v8';
+const mode = process.argv[1];
+const url = await new Promise((resolve, reject) => {
+  process.once('message', resolve);
+  process.once('disconnect', () => reject(new Error('parent disconnected before inspector URL')));
+});
+const socket = new WebSocket(url);
+const pending = new Map();
+let nextId = 1;
+let closing = false;
+const fail = error => {
+  for (const request of pending.values()) request.reject(error);
+  pending.clear();
+};
+socket.onmessage = event => {
+  const message = JSON.parse(event.data);
+  const request = pending.get(message.id);
+  if (request) {
+    pending.delete(message.id);
+    request.resolve(message);
+  }
+};
+socket.onerror = () => fail(new Error('inspector socket failed'));
+socket.onclose = () => { if (!closing) fail(new Error('inspector socket closed')); };
+const post = (method, params) => new Promise((resolve, reject) => {
+  if (socket.readyState !== WebSocket.OPEN) return reject(new Error('inspector is not connected'));
+  const id = nextId++;
+  pending.set(id, { resolve, reject });
+  socket.send(JSON.stringify({ id, method, params }));
+});
+const actor = mode === 'disable-callback' ? new CallbackSession() : new Session();
+try {
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve, { once: true });
+    socket.addEventListener('error', () => reject(new Error('inspector connection failed')), { once: true });
+    socket.addEventListener('close', () => reject(new Error('inspector closed before connecting')), { once: true });
+  });
+  actor.connect();
+  if (mode.endsWith('-enabled')) await actor.post('HeapProfiler.enable');
+  globalThis.snapshotCleanupMarker = 'inspector-snapshot-cleanup-marker';
+  const snapshot = JSON.parse(readFileSync(writeHeapSnapshot(path.join(process.cwd(), 'capture.heapsnapshot')), 'utf8'));
+  const fields = snapshot.snapshot.meta.node_fields;
+  const stride = fields.length;
+  const nameIndex = fields.indexOf('name');
+  const idIndex = fields.indexOf('id');
+  const typeIndex = fields.indexOf('type');
+  const stringType = snapshot.snapshot.meta.node_types[typeIndex].indexOf('string');
+  let heapObjectId;
+  for (let offset = 0; offset < snapshot.nodes.length; offset += stride) {
+    if (snapshot.nodes[offset + typeIndex] === stringType && snapshot.strings[snapshot.nodes[offset + nameIndex]] === globalThis.snapshotCleanupMarker) {
+      // BunV8HeapSnapshotBuilder reserves IDs 1 and 2 for synthetic roots.
+      heapObjectId = snapshot.nodes[offset + idIndex] - 2;
+      break;
+    }
+  }
+  assert(Number.isInteger(heapObjectId) && heapObjectId > 0, 'snapshot did not contain the marker');
+  const before = await post('Heap.getPreview', { heapObjectId });
+  assert.equal(before.error, undefined, JSON.stringify(before));
+  assert.equal(before.result.string, globalThis.snapshotCleanupMarker);
+  if (mode.startsWith('disconnect')) {
+    actor.disconnect();
+  } else if (mode === 'disable-callback') {
+    let completed = false;
+    actor.post('HeapProfiler.disable', error => {
+      assert.equal(error, null);
+      completed = true;
+    });
+    assert.equal(completed, true);
+  } else {
+    await actor.post('HeapProfiler.disable');
+  }
+  // Keep the native observer attached: detaching it could itself clear the snapshot.
+  const after = await post('Heap.getPreview', { heapObjectId });
+  assert.deepEqual(after.error, {
+    code: -32000,
+    message: 'No heap snapshot',
+    data: [{ code: -32000, message: 'No heap snapshot' }],
+  });
+  assert.equal(globalThis.snapshotCleanupMarker, 'inspector-snapshot-cleanup-marker');
+  console.log(JSON.stringify({ mode, trackedBefore: true, snapshotCleared: true, observerConnected: socket.readyState === WebSocket.OPEN }));
+} finally {
+  actor.disconnect();
+  closing = true;
+  socket.close();
+  process.disconnect();
+}
+`;
+
 // Mirrors how vitest's @vitest/coverage-v8 provider drives the inspector: a
 // promise Session, Profiler.enable, startPreciseCoverage, evaluating modules
 // through node:vm, then takePreciseCoverage.
@@ -218,6 +356,99 @@ describe("node:inspector", () => {
   });
 
   describe("HeapProfiler", () => {
+    test.each([
+      "disable-enabled",
+      "disable-unenabled",
+      "disconnect-enabled",
+      "disconnect-unenabled",
+      "disable-callback",
+    ])("%s releases native snapshot metadata with another observer connected", async mode => {
+      using directory = tempDir("inspector-heap-snapshot-cleanup", {});
+      await using proc = Bun.spawn({
+        cmd: [bunExe(), "--inspect=127.0.0.1:0", "-e", heapSnapshotCleanupFixture, mode],
+        env: bunEnv,
+        cwd: String(directory),
+        ipc() {},
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stderrPromise = (async () => {
+        let stderr = "";
+        let sent = false;
+        for await (const chunk of proc.stderr) {
+          stderr += new TextDecoder().decode(chunk);
+          const url = stderr.match(/ws:\/\/127\.0\.0\.1:\d+\/[^\s]+/)?.[0];
+          if (url && !sent) {
+            sent = true;
+            proc.send(url);
+          }
+        }
+        return stderr;
+      })();
+      const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), stderrPromise, proc.exited]);
+      expect({ stdout, exitCode }, stderr).toEqual({
+        stdout: JSON.stringify({ mode, trackedBefore: true, snapshotCleared: true, observerConnected: true }) + "\n",
+        exitCode: 0,
+      });
+    });
+
+    test("allocation sampling reports integral bytes for live and stopped profiles", async () => {
+      await using proc = Bun.spawn({
+        cmd: [
+          bunExe(),
+          "--input-type=module",
+          "-e",
+          `
+import assert from 'node:assert/strict';
+import { Session } from 'node:inspector/promises';
+const session = new Session();
+session.connect();
+function allocateHeapProfileWorkload() {
+  const retained = [];
+  for (let i = 0; i < 8; i++) {
+    const row = [];
+    row.length = 131072;
+    row.fill(i);
+    retained.push(row);
+  }
+  return retained;
+}
+function validate(profile) {
+  const nodes = [profile.head];
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    assert(Number.isSafeInteger(node.selfSize) && node.selfSize >= 0, 'fractional node byte size: ' + node.selfSize);
+    nodes.push(...node.children);
+  }
+  const allocated = nodes.filter(node => node.callFrame.functionName === 'allocateHeapProfileWorkload' && node.selfSize > 0);
+  assert(allocated.length > 0, 'allocation site missing');
+  assert(profile.samples.some(sample => allocated.some(node => node.id === sample.nodeId)), 'allocation samples missing');
+  for (const sample of profile.samples) {
+    assert(Number.isSafeInteger(sample.size) && sample.size > 0, 'fractional sample byte size: ' + sample.size);
+  }
+}
+try {
+  await session.post('HeapProfiler.startSampling', { samplingInterval: 65536 });
+  globalThis.retainedHeapProfileWorkload = allocateHeapProfileWorkload();
+  validate((await session.post('HeapProfiler.getSamplingProfile')).profile);
+  validate((await session.post('HeapProfiler.stopSampling')).profile);
+} finally {
+  session.disconnect();
+  delete globalThis.retainedHeapProfileWorkload;
+}
+console.log('integral allocation bytes passed');
+`,
+        ],
+        env: bunEnv,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+      expect(stdout).toBe("integral allocation bytes passed\n");
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+    });
+
     test("worker allocation sampling is independent of the main VM", async () => {
       await using proc = Bun.spawn({
         cmd: [bunExe(), import.meta.dir + "/inspector-sampling-worker.fixture.cjs"],
@@ -568,6 +799,69 @@ console.log('allocation sampling contract passed');
   });
 
   describe("Profiler", () => {
+    for (const mode of ["idle", "busy"] as const) {
+      for (const worker of [false, true]) {
+        test.concurrent(
+          `measures the whole ${mode} capture and samples its startup stack (worker: ${worker})`,
+          async () => {
+            const fixture = profileDurationFixture(mode);
+            const source = worker
+              ? `import { Worker } from 'node:worker_threads';
+               const worker = new Worker(new URL(${JSON.stringify("data:text/javascript," + encodeURIComponent(fixture))}));
+               worker.on('error', error => { console.error(error); process.exitCode = 1; });
+               worker.on('exit', code => { if (code) process.exitCode = code; });`
+              : fixture;
+            await using proc = Bun.spawn({
+              cmd: [bunExe(), "--input-type=module", "-e", source],
+              env: bunEnv,
+              stdout: "pipe",
+              stderr: "pipe",
+            });
+            const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+            expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+          },
+        );
+      }
+    }
+    test.concurrent("includes idle time in an externally started worker CPU profile", async () => {
+      await using proc = Bun.spawn({
+        cmd: [
+          bunExe(),
+          "--input-type=module",
+          "-e",
+          `import assert from 'node:assert/strict';
+           import { Worker } from 'node:worker_threads';
+           import { setTimeout as delay } from 'node:timers/promises';
+           const worker = new Worker(\`const { parentPort } = require('node:worker_threads');
+             parentPort.on('message', () => {}); parentPort.postMessage('ready');\`, { eval: true });
+           try {
+             await new Promise((resolve, reject) => {
+               worker.once('message', resolve);
+               worker.once('error', reject);
+               worker.once('exit', () => reject(new Error('worker exited before ready')));
+             });
+             const before = performance.now();
+             const handle = await worker.startCpuProfile();
+             const started = performance.now();
+             // The worker stays outside JS: JSC can return no periodic samples.
+             await delay(25);
+             const stopping = performance.now();
+             const profile = JSON.parse(await handle.stop());
+             const stopped = performance.now();
+             const duration = (profile.endTime - profile.startTime) / 1000;
+             assert.ok(duration >= stopping - started - 0.001, JSON.stringify(profile));
+             assert.ok(duration <= stopped - before + 0.001);
+           } finally { await worker.terminate(); }
+           console.log('ok');`,
+        ],
+        env: bunEnv,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+      expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+    });
+
     let session: inspector.Session;
 
     beforeEach(() => {

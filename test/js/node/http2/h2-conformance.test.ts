@@ -164,7 +164,7 @@ beforeAll(async () => {
     stream.respond({ ":status": 200 });
     stream.end("ok");
   });
-  server.listen(0);
+  server.listen(0, "127.0.0.1");
   await once(server, "listening");
   port = (server.address() as net.AddressInfo).port;
 });
@@ -376,7 +376,7 @@ describe("CONTINUATION (checklist §3,§7)", () => {
       stream.respond({ ":status": 200 });
       stream.end("ok");
     });
-    server.listen(0);
+    server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const c = await RawH2.connect((server.address() as net.AddressInfo).port);
     try {
@@ -953,7 +953,7 @@ describe("request header and body framing (RFC 9113 §8.1)", () => {
       });
       stream.resume();
     });
-    deferredServer.listen(0);
+    deferredServer.listen(0, "127.0.0.1");
     await once(deferredServer, "listening");
     deferredPort = (deferredServer.address() as net.AddressInfo).port;
   });
@@ -1333,7 +1333,7 @@ describe("inbound stream lifecycle", () => {
       stream.resume();
       if (refs.length === total) allOpen.resolve();
     });
-    server.listen(0);
+    server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const c = await RawH2.connect((server.address() as net.AddressInfo).port);
     try {
@@ -1516,9 +1516,9 @@ describe("inbound stream lifecycle", () => {
       });
       stream.end("body");
     });
-    server.listen(0);
+    server.listen(0, "127.0.0.1");
     await once(server, "listening");
-    const client = http2.connect(`http://localhost:${(server.address() as net.AddressInfo).port}`);
+    const client = http2.connect(`http://127.0.0.1:${(server.address() as net.AddressInfo).port}`);
     client.on("error", e => trailers.reject(e));
     try {
       const req = client.request({ ":path": "/" });
@@ -1541,7 +1541,7 @@ describe("inbound stream lifecycle", () => {
       stream.respond({ ":status": 200 });
       stream.write(Buffer.alloc(1 << 22, "a"));
     });
-    server.listen(0);
+    server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const c = await RawH2.connect((server.address() as net.AddressInfo).port);
     try {
@@ -1577,7 +1577,7 @@ describe("inbound stream lifecycle", () => {
         stream.respond({ ":status": 200 });
         stream.write(Buffer.alloc(1 << 22, "a"));
       });
-      server.listen(0);
+      server.listen(0, "127.0.0.1");
       await once(server, "listening");
       const c = await RawH2.connect((server.address() as net.AddressInfo).port);
       try {
@@ -1614,7 +1614,7 @@ describe("inbound stream lifecycle", () => {
         stream.end("ok");
       }
     });
-    server.listen(0);
+    server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const c = await RawH2.connect((server.address() as net.AddressInfo).port);
     c.sendPreface();
@@ -1740,7 +1740,7 @@ describe("stream release after a queued END_STREAM", () => {
   const STALLED_BODY = Buffer.alloc(256 * 1024, "s");
 
   async function listen(server: http2.Http2Server): Promise<string> {
-    server.listen(0);
+    server.listen(0, "127.0.0.1");
     await once(server, "listening");
     return `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`;
   }
@@ -1944,8 +1944,12 @@ describe("stream-reset floods (CVE-2023-44487 rapid reset, CVE-2025-8671 MadeYou
 
   function respondingServer(options: Record<string, unknown> = {}, rejectUploads = false) {
     const state = { handlers: 0, sessionErrorCode: undefined as string | undefined };
+    const sessionError = Promise.withResolvers<string>();
     const server = http2.createServer(options);
-    server.on("sessionError", (e: any) => (state.sessionErrorCode = e.code));
+    server.on("sessionError", (e: any) => {
+      state.sessionErrorCode = e.code;
+      sessionError.resolve(e.code);
+    });
     server.on("session", s => s.on("error", () => {}));
     server.on("stream", (stream: any, headers: any) => {
       state.handlers++;
@@ -1954,11 +1958,11 @@ describe("stream-reset floods (CVE-2023-44487 rapid reset, CVE-2025-8671 MadeYou
       stream.respond({ ":status": 200 });
       stream.end("x");
     });
-    return { server, state };
+    return { server, state, sessionError: sessionError.promise };
   }
 
   async function withClient<T>(server: http2.Http2Server, body: (c: RawH2) => Promise<T>): Promise<T> {
-    server.listen(0);
+    server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const c = await RawH2.connect((server.address() as net.AddressInfo).port);
     try {
@@ -1972,10 +1976,11 @@ describe("stream-reset floods (CVE-2023-44487 rapid reset, CVE-2025-8671 MadeYou
   }
 
   async function flood(opts: { options?: Record<string, unknown>; count: number; kill?: (sid: number) => Buffer }) {
-    const { server, state } = respondingServer(opts.options);
+    const { server, state, sessionError } = respondingServer(opts.options);
     return withClient(server, async c => {
       c.send(pairs(opts.count, 1, opts.kill ?? rstStream));
       const goaway = await c.waitForGoaway(10_000);
+      await sessionError;
       return { c, goaway, ...state };
     });
   }
@@ -2143,20 +2148,21 @@ describe("stream-reset floods (CVE-2023-44487 rapid reset, CVE-2025-8671 MadeYou
     // nghttp2 can exempt every reset after its GOAWAY because it ignores the streams a client
     // opens after that frame. This engine still opens them, so only the earlier streams are exempt.
     // It also accepts ids below the held stream's, so the GOAWAY's last stream id is no criterion.
-    const { server, state } = respondingServer();
+    const { server, state, sessionError } = respondingServer();
     await withClient(server, async c => {
       c.send(upload(4001));
       await serverGoaway(c);
       c.send(pairs(1200, 1, rstStream));
       const goaway = await c.waitFor(calm, 10_000);
       expect(goaway.payload.subarray(8).toString()).toBe("too many stream resets");
+      await sessionError;
       expect(state.sessionErrorCode).toBe("ERR_HTTP2_ERROR");
     });
   });
 
   test("server-sent resets stay charged after the server has sent its GOAWAY", async () => {
     // Every stream here is older than the GOAWAY. The exemption is for the peer's own resets only.
-    const { server, state } = respondingServer();
+    const { server, state, sessionError } = respondingServer();
     await withClient(server, async c => {
       const ids = Array.from({ length: 1300 }, (_, i) => 1 + 2 * i);
       c.send(Buffer.concat(ids.map(upload)));
@@ -2164,6 +2170,7 @@ describe("stream-reset floods (CVE-2023-44487 rapid reset, CVE-2025-8671 MadeYou
       c.send(Buffer.concat(ids.map(madeYouReset["WINDOW_UPDATE with a 0 increment"])));
       const goaway = await c.waitFor(calm, 10_000);
       expect(goaway.payload.subarray(8).toString()).toBe("too many stream resets");
+      await sessionError;
       expect(state.sessionErrorCode).toBe("ERR_HTTP2_ERROR");
     });
   });

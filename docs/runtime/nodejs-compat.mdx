@@ -143,6 +143,8 @@ Child IPC dispatch calls the JavaScript `process.emit` property for `message`, `
 
 Child stdout/stderr `ref()` and `unref()` set the pipe reference state and return the stream. Repeated calls are idempotent, so one `unref()` releases the reference after any number of `ref()` calls.
 
+On POSIX, ready child exits and owned pipe EOF remain observable after a blocked I/O callback, before a deadline timer's deferred observer. Extra stdio pipes participate in child `close` accounting. A descendant that retains a pipe keeps it open until real EOF; child exit does not synthesize EOF.
+
 Child construction publishes the `child_process` diagnostics channel with the exact child object. Spawning publishes `child_process.spawn` tracing start, end, and error events before the corresponding child events. Unspawned stdio getters are safe; failed spawns drain readable pipes to EOF and retain fork IPC methods. Exit listeners run before stdio resumes, and POSIX PATH permission failures report `EACCES`.
 
 🟡 IPC can send `net.Socket`, `net.Server` and `dgram.Socket` handles (including to and from Node.js processes), but not `http` server sockets. `serialization: "advanced"` only works between Bun processes, so use JSON serialization for Node.js ↔ Bun IPC. Missing `subprocess.channel.ref()`/`unref()`. You cannot pass a child's `stdout`/`stderr` as another child's `stdio`, and `spawnSync` does not return extra `stdio` pipes in `output`.
@@ -242,7 +244,11 @@ Socket close notifications use internal scheduling and continue to run when user
 
 On POSIX, initializing `process.stdout` or `process.stderr` does not retain a duplicate pipe writer. Explicitly closing the underlying descriptor publishes EOF while the process remains alive. On Windows, the initialized pipe handle retains the writer until process exit, matching Node. On POSIX, socket and pipe stdio use nonblocking writes. `end()` and pipeline completion flush pending output and shut down the write side of socket stdio, so peers receive EOF before process exit. Actual pipes stay open until process exit or explicit descriptor closure. `destroy()` preserves fd 1/2; after POSIX socket or pipe finalization, later stream writes fail with `EPIPE`. On Windows, piped stdout/stderr reset their writable state after `end()` or pipeline completion and accept subsequent writes.
 
+Isolated test files release their process stdout/stderr polling registrations between files while keeping the underlying descriptors open for the next file.
+
 `NODE_OPTIONS` applies Bun-supported Node runtime flags before command-line arguments, including `--require`/`-r` and `--import` preloads. Injected flags are absent from `process.execArgv`. Unsupported Node flags remain ignored; flags outside the Node allowlist warn and are ignored. `process.config.variables.node_without_node_options` remains `true` because support is partial.
+
+`--max-old-space-size=N` limits the managed JavaScript heap in MiB through the pinned OpenClaw WebKit. ArrayBuffer backing stores are excluded. A full garbage collection that cannot bring the main VM under the limit causes a fatal heap out-of-memory error. Command-line values override `NODE_OPTIONS`; zero restores the default. Underscores may replace dashes in the flag name. This bounds the managed heap rather than total process RSS. Initialization overhead and fatal errors for extremely small or overflowing limits differ between JavaScriptCore and V8; Bun does not reproduce V8's internal assertions for extreme values.
 
 Direct file execution preserves a literal `--` after the script name in `process.argv`, including with `--import` preloads. Explicit `bun run` commands and package scripts consume one separator.
 
@@ -266,6 +272,12 @@ Native `fetch()` uses `tls.setDefaultCACertificates()` overrides for new TLS con
 
 TLS starts reading paused Duplex and HTTP CONNECT transports after installing its listeners, including handshake bytes buffered before adoption.
 
+Destroying a TLS socket destroys its underlying Duplex transport without calling `end()`, matching Node.js. Graceful TLS shutdown still ends the transport after sending its TLS shutdown data.
+
+A TLS socket over a Duplex inherits the transport's `allowHalfOpen` setting. A peer TLS shutdown ends the readable side. With `allowHalfOpen: true`, the writable side remains available until the application calls `end()`.
+
+Destroying an HTTP/2 session releases its TLS transport without waiting for the peer to end its writable side. The session emits its final events after the transport closes.
+
 🟡 Missing `pskCallback`, OCSP stapling (`requestOCSP`), the server `'newSession'`/`'resumeSession'` events and session ticket keys (`ticketKeys` is ignored). As a result, session resumption does not work across processes. Bun uses BoringSSL, so `tlsSocket.renegotiate()` always fails and `getEphemeralKeyInfo()`/`getSharedSigalgs()` return no information.
 
 ### [`node:util`](https://nodejs.org/api/util.html)
@@ -282,19 +294,23 @@ Map and Set serialization copies entries and ignores custom own properties, like
 
 Contextified globals, `DONT_CONTEXTIFY` globals, and the main realm allow a Proxy in their prototype chain, including jsdom Window prototypes. This requires the fork’s pinned OpenClaw WebKit.
 
+The pinned engine initializes VM entry storage and deferred microtask scopes so stale native values do not retain otherwise unreachable objects.
+
 🟢 Fully implemented, including `vm.Script`, `vm.createContext`, `vm.runInContext`, `vm.runInNewContext`, `vm.runInThisContext`, `vm.compileFunction`, `vm.isContext`, the ES module classes `vm.Module`, `vm.SourceTextModule` and `vm.SyntheticModule` (exported without `--experimental-vm-modules`), and `importModuleDynamically` support. The `timeout`, `breakOnSigint`, `cachedData`, `microtaskMode` and `codeGeneration` options are supported. An `importModuleDynamically` callback that returns a promise for a `vm.Module` resolves `import()` to the module object rather than its namespace. `vm.measureMemory()` reports whole-heap figures for every context.
 
 The OpenClaw fork caches repeated `vm.Script` and `vm.compileFunction` compilations, including the `runInThisContext`, `runInContext`, and `runInNewContext` helpers. Each evaluation still creates fresh values and uses the target context's global object. Source text, filenames, offsets, compilation options, and dynamic import callback identity distinguish entries. Explicit `cachedData` uses the existing validation path. Valid `vm.Script` cached data also works when the JIT is unavailable. Empty, invalid, or incompatible-version data sets `cachedDataRejected` to `true`, and the script falls back to compiling the source.
+
+Matching compilation-cache entries share their owned source character buffer with later compilations. Providers, filenames, offsets, dynamic import referrers and execution values remain separate. Cold misses and explicit `cachedData` keep their existing source path. Promotion preserves the shared buffer, and the cache charges it once per entry. Eviction removes the cache charge; live scripts or functions can still retain the buffer.
 
 On Linux x64 with glibc, long sources with the same string encoding use an exact byte comparison for cache lookup. Short sources and mixed string encodings keep the engine's comparison path. Every source byte remains part of cache validation.
 
 Admission starts after a VM observes **1,750 distinct successfully compiled source fingerprints** (the memoized JSC source hash and source length). This leaves 250 entries below JSC’s 2,000-entry pruning boundary for other compilation users. Before admission, compilation uses the existing JSC path without source copies, bytecode serialization or retained payloads. A bounded fingerprint set tracks admission; hash collisions can postpone activation but cannot produce a false compilation hit. Activation lasts for the VM’s lifetime, and the fingerprint set is then released. `BUN_VM_COMPILE_CACHE_THRESHOLD` accepts an integer from `0` (immediate activation) through `2000`; invalid values use `1750`. Both settings are read on first use.
 
-The cache has a **256 MiB budget per JavaScript VM** (each worker has its own VM). Entries are evicted in least-recently-used order. Set `BUN_VM_COMPILE_CACHE_SIZE` to a decimal byte count before starting Bun; `0` disables this cache. Invalid values use the default. The value is read on first use. The admission tracker holds at most 2,001 64-bit fingerprints (about 32 KiB of table storage, excluding allocator overhead) before activation; setting the byte budget to zero disables tracking too. The active cache budget charges copied source and filename bytes, immutable bytecode payloads, and a 1 KiB metadata reservation per entry. Allocator overhead, temporary compilation buffers, and code or payloads still held by live Scripts/functions are outside the cache budget. Decoded code is held weakly, so its lazily compiled children do not become additional cache-owned memory. The first request saves the compiled program; a repeated request also caches nested function bytecode when it fits the budget.
+The cache has a **256 MiB budget per JavaScript VM** (each worker has its own VM). Entries are evicted in least-recently-used order. Set `BUN_VM_COMPILE_CACHE_SIZE` to a decimal byte count before starting Bun; `0` disables this cache. Invalid values use the default. The value is read on first use. The admission tracker holds at most 2,001 64-bit fingerprints (about 32 KiB of table storage, excluding allocator overhead) before activation; setting the byte budget to zero disables tracking too. The active cache budget charges copied source and filename bytes, immutable bytecode payloads, and a 1 KiB metadata reservation per entry. Allocator overhead, temporary compilation buffers, and code or payloads still held by live Scripts/functions are outside the cache budget. Decoded code is held weakly, so its lazily compiled children do not become additional cache-owned memory. The first request saves the compiled program. Reuse of a live block snapshots function bodies already generated by execution. On a decoded hit, the cache preserves deferred bytecode and attempts full generation only if the snapshot has an uncompiled function body. It makes at most one full-generation attempt per entry. All payloads remain subject to the same budget. Explicit cached-data generation retains the full, source-based path.
 
 Admission tracking adds a small cost to smaller graphs. In a Linux replay of captured module wrappers, 500 modules took **6.95 ms on fork main and 7.19 ms with the cache**: 3.5% slower, or about 0.5 µs per compilation. The paired 95% bootstrap interval across 20 pairs was 1.011–1.054 times main. An initial paired run measured about 256 KiB higher median peak RSS; later RSS samples overlapped main. At 2,500 modules, warm replay fell from **191.6 to 52.6 ms** (72.5% faster). At 4,000, it fell from **371.4 to 85.1 ms** (77.1% faster). Those larger-graph results use five interleaved runs per runtime. The trade-off targets graphs near or beyond JSC's pruning boundary. Set `BUN_VM_COMPILE_CACHE_SIZE=0` to disable it.
 
-The same replay took Node 24 **39.7 ms at 2,500 modules and 63.4 ms at 4,000**. Bun's bounded cache remained 32.7% and 34.3% slower, respectively. These workload-specific measurements do not promise Node parity. Further engine work could provide a retained-size and growth contract for complete unlinked-code graphs, or explicit ownership for decoded code that borrows storage from evictable bytecode payloads. Either approach would need separate lifetime and performance validation. This cache changes neither WebKit nor application dependencies.
+In those initial measurements, the same replay took Node 24 **39.7 ms at 2,500 modules and 63.4 ms at 4,000**. Bun's bounded cache remained 32.7% and 34.3% slower, respectively. These workload-specific measurements do not promise Node parity. Further engine work could provide a retained-size and growth contract for complete unlinked-code graphs, or explicit ownership for decoded code that borrows storage from evictable bytecode payloads. Either approach would need separate lifetime and performance validation. This cache changes neither WebKit nor application dependencies.
 
 Valid `vm.Script` cached data is accepted when JSC runs without a JIT. Validation decodes the payload; each execution links its own program through the normal runtime path.
 
@@ -304,15 +320,25 @@ Valid `vm.Script` cached data is accepted when JSC runs without a JIT. Validatio
 
 ### [`node:worker_threads`](https://nodejs.org/api/worker_threads.html)
 
-`resourceLimits` reports effective heap, nursery, code-range, and stack settings. With the pinned OpenClaw WebKit, managed-heap exhaustion terminates only the affected worker with `ERR_WORKER_OUT_OF_MEMORY` and exit code 1. After a full GC confirms the cap is exceeded, pending termination is delivered at an existing JavaScript safe point without waiting for repeated full collections. ArrayBuffer backing stores are excluded. `codeRangeSizeMb` is reporting-only because JSC shares its executable allocator. See [worker resource limits](/runtime/workers#node-worker-resource-limits) for defaults and limitations.
+Worker shutdown releases the thread's native event-name cache after destroying its VM.
+
+Queued worker stdout and stderr are delivered before the worker's `exit` event, including when a synchronous exit races the parent's stdio setup.
+
+`resourceLimits` reports resolved heap, nursery, code-range, and stack settings. With the pinned OpenClaw WebKit, managed-heap exhaustion terminates only the affected worker with `ERR_WORKER_OUT_OF_MEMORY` and exit code 1. After a full GC confirms the cap is exceeded, pending termination is delivered at an existing JavaScript safe point without waiting for repeated full collections. ArrayBuffer backing stores are excluded. `codeRangeSizeMb` is reporting-only because JSC shares its executable allocator. See [worker resource limits](/runtime/workers#node-worker-resource-limits) for defaults and limitations.
 
 `worker.getHeapStatistics()` takes an owning-thread snapshot while a worker is idle, executing JavaScript, or blocked in `Atomics.wait()`. The snapshot includes freshly allocated external storage. Inspection preserves the atomic wait and pending requests settle if the worker exits.
 
 Immediate engine GC timers wake idle workers when scheduled. These native wakeups do not keep a worker alive.
 
+Worker teardown avoids an extra full collection before final heap destruction. Native cleanup hooks and registered finalizers still run before the exit is acknowledged.
+
 Budgeted workers can use young-generation collections within their managed heap budgets; full collections still confirm heap-limit exhaustion. Synchronous GC wakes a passive collector even while another heap occupies the shared helpers.
 
+On Linux, other VMs can collect when termination is requested for a worker blocked on a foreign native stack. Termination stays pending until the worker reaches a JavaScript safe point. Blocking GC suspension still requires a valid stack and register snapshot.
+
 File workers select `--require` and `--import` preloads from their environment independently of `execArgv`. Explicit `env` or `execArgv` options re-read the worker's `NODE_OPTIONS` and `BUN_OPTIONS` before applying the selected CLI arguments. `execArgv: []` removes CLI preloads while environment preloads still apply. Require preloads run before import preloads.
+
+A process-level `--max-old-space-size` overrides `resourceLimits.maxOldGenerationSizeMb` for Node workers, including nested workers and workers with `execArgv: []`. Their public `resourceLimits` still reports the requested setting, as Node does. Worker-local `NODE_OPTIONS` cannot change the process heap flag; putting the flag in an explicit Worker `execArgv` throws `ERR_WORKER_INVALID_EXEC_ARGV`. Exceeding the limit still terminates only the worker.
 
 `MessagePort.emit()` and `parentPort.emit()` preserve the emitted value for Node listeners. Web listeners receive `MessageEvent` objects for `message` and `messageerror`, and `CustomEvent` objects for other events.
 
@@ -322,6 +348,10 @@ MessagePort message and close events run in the port creation AsyncLocalStorage 
 
 Node-API threadsafe functions deliver or return every accepted native payload before finalization when a worker stops, including during a microtask between callbacks.
 
+Node-API external values and `napi_add_finalizer` callbacks run during environment cleanup, including natural main-thread exit. Worker termination also releases external strings on their creating thread. String callbacks receive a null environment when their storage outlives environment cleanup, matching Node. Addon-owned external strings are copied before another thread receives their storage; other string sharing behavior is unchanged.
+
+Natural main-thread exit does not destroy the main JavaScript heap. External strings still retained by that heap therefore do not run their storage finalizers at natural exit. Explicit main-thread `process.exit()` skips environment cleanup, as in Node.
+
 Creating a `SHARE_ENV` worker preserves the parent's `process.env` identity. Cached references observe shared writes, deletes, property definitions, and enumeration.
 Repeated `delete` and `Reflect.deleteProperty()` calls remove shared entries even after JIT warmup.
 Writes also reach the shared environment when value coercion creates the first worker, including on Windows. Newly assigned Windows environment variables, including native-backed variables such as `TZ`, are enumerable and survive environment copies and child-process inheritance.
@@ -330,7 +360,9 @@ Writes also reach the shared environment when value coercion creates the first w
 
 ### [`node:inspector`](https://nodejs.org/api/inspector.html)
 
-🟡 Partially implemented. `Session` supports the `Profiler` domain (including precise coverage), `Runtime.enable` and `NodeTracing`, from both `node:inspector` and `node:inspector/promises`. `HeapProfiler.enable`, `HeapProfiler.disable`, and `HeapProfiler.collectGarbage` work in main-thread and worker sessions; collection runs after the current JavaScript job and completes before its callback. `HeapProfiler.startSampling`, `getSamplingProfile`, and `stopSampling` provide byte-based allocation-site profiles, including separate major/minor GC inclusion flags, through local main-thread and worker sessions. Sampling and garbage collection through a worker's `connectToMainThread()` session are not implemented. After `open()`, `Session` also forwards `Debugger` configuration commands such as `Debugger.enable` and `Debugger.setBreakpointByUrl` to the inspector server. Their results, such as `breakpointId`, are not returned. Other `Session` commands such as `Runtime.evaluate` are not implemented. `open()`, `url()`, `close()` and `waitForDebugger()` are implemented. `open()` serves the `Debugger` and `Runtime` domains and throws in workers. Missing `Network`.
+CPU profile duration uses a monotonic clock and includes idle time. Inspector profiling captures the current stack at startup, even if no periodic samples follow.
+
+🟡 Partially implemented. `Session` supports the `Profiler` domain (including precise coverage), `Runtime.enable` and `NodeTracing`, from both `node:inspector` and `node:inspector/promises`. `HeapProfiler.enable`, `HeapProfiler.disable`, and `HeapProfiler.collectGarbage` work in main-thread and worker sessions; collection runs after the current JavaScript job and completes before its callback. Disabling `HeapProfiler` or disconnecting a local Session releases its VM's retained heap-snapshot metadata, even when that Session never enabled the domain. `HeapProfiler.startSampling`, `getSamplingProfile`, and `stopSampling` provide byte-based allocation-site profiles, including separate major/minor GC inclusion flags, through local main-thread and worker sessions. Estimated node and sample sizes are independently rounded to whole bytes. Sampling and garbage collection through a worker's `connectToMainThread()` session are not implemented. After `open()`, `Session` also forwards `Debugger` configuration commands such as `Debugger.enable` and `Debugger.setBreakpointByUrl` to the inspector server. Their results, such as `breakpointId`, are not returned. Other `Session` commands such as `Runtime.evaluate` are not implemented. `open()`, `url()`, `close()` and `waitForDebugger()` are implemented. `open()` serves the `Debugger` and `Runtime` domains and throws in workers. Missing `Network`.
 
 ### [`node:repl`](https://nodejs.org/api/repl.html)
 

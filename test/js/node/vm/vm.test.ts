@@ -2895,32 +2895,44 @@ test.concurrent("a FinalizationRegistry cleanup job is dropped when its context 
     const nextTurn = () => new Promise(resolve => setImmediate(resolve));
     const liveContextCleanedUp = Promise.withResolvers();
     let liveContext;
-    let deadContextCleanups = 0;
+    const cleanups = [0, 0, 0, 0];
+    const dropped = [];
 
     function setup() {
       // A collection sweeps the first 8 cells of a type itself and leaves the rest for later. ~JSGlobalObject
       // cancels the job too, so these contexts are past the first 8 and their registries are not.
       const swept = Array.from({ length: 8 }, () => vm.createContext({}));
-      const contexts = Array.from({ length: 4 }, () => vm.createContext({ onCleanup: () => deadContextCleanups++ }));
+      const contexts = Array.from(cleanups, (_, index) => vm.createContext({ onCleanup: () => cleanups[index]++ }));
+      // Each realm strongly holds its sandbox, so a cleared sandbox witness proves that realm was unmarked.
+      for (const context of contexts) dropped.push(new WeakRef(context));
       liveContext = vm.createContext({ onCleanup: liveContextCleanedUp.resolve });
       contexts.push(liveContext);
       for (const context of contexts) vm.runInContext("globalThis.registry = new FinalizationRegistry(onCleanup)", context);
       edenGC(); // Old generation now: the next eden collection leaves them marked.
       for (const context of contexts) for (let i = 0; i < 5; i++) context.registry.register({ i }, i);
+      contexts.length = 0; // A stale reference to this array must not retain every dropped context.
     }
 
     await nextTurn().then(setup);
     await nextTurn();
+    const cleanupsBeforeCollection = cleanups.slice();
     edenGC(); // The registered objects are dead: every registry posts its cleanup job.
-    fullGC(); // All contexts but one are dead, and their registries are destroyed.
+    fullGC(); // Cancel jobs for realms this collection finds dead, before yielding to their cleanup jobs.
+    const collected = dropped.map(context => context.deref() === undefined);
     await liveContextCleanedUp.promise;
     await nextTurn(); // A job posted after the live context's has run by now too.
-    console.log({ deadContextCleanups });
+    console.log({
+      cleanupsBeforeCollection,
+      // One collected realm exercises cancellation; requiring all four assumes a particular stack layout.
+      someContextCollected: collected.includes(true),
+      collectedContextsHadNoCleanups: cleanups.every((count, index) => !collected[index] || count === 0),
+    });
   `;
   await using proc = Bun.spawn({ cmd: [bunExe(), "-e", fixture], env: bunEnv, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
   expect({ stdout, stderr, exitCode }).toEqual({
-    stdout: "{\n  deadContextCleanups: 0,\n}\n",
+    stdout:
+      "{\n  cleanupsBeforeCollection: [ 0, 0, 0, 0 ],\n  someContextCollected: true,\n  collectedContextsHadNoCleanups: true,\n}\n",
     stderr: "",
     exitCode: 0,
   });
@@ -2976,6 +2988,131 @@ describe("bounded vm compilation cache", () => {
     const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
     expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
   }
+
+  test.concurrent.each(["é", "λ🚀"])("shares source buffers on Script compilation-cache hits: %s", async marker => {
+    await runCacheFixture(`
+      import assert from "node:assert/strict";
+      import { Script } from "node:vm";
+      import { sourcesShareBackingStore as shared, nodeVMCompilationCacheStats as stats } from "bun:internal-for-testing";
+      const text = "/* " + ${JSON.stringify(marker)} + " " + Buffer.alloc(8192, "x").toString() + " */\\n(function identify() { return [value, new Error().stack]; })";
+      const options = { filename: "shared.js", lineOffset: 10 };
+      const scripts = [];
+      const compile = (value, overrides = {}) => {
+        const script = new Script(Buffer.from(text).toString(), { ...options, ...overrides });
+        scripts.push(script);
+        return script.runInNewContext({ value });
+      };
+      const seed = compile("seed"); seed();
+      const first = compile("first"); first();
+      const afterPromotion = stats();
+      const second = compile("second");
+      assert.equal(stats().hits, afterPromotion.hits + 1);
+      assert.equal(stats().bytes, afterPromotion.bytes);
+      assert.equal(shared(first, second), true);
+      assert.notEqual(first, second);
+      assert.equal(first()[0], "first");
+      assert.equal(second()[0], "second");
+      assert.match(second()[1], /shared.js:12:/);
+      assert.equal(shared(first, compile("filename", { filename: "other.js" })), false);
+      const offset = compile("offset", { lineOffset: 20 });
+      assert.equal(shared(first, offset), false);
+      assert.match(offset()[1], /shared.js:22:/);
+      const beforeData = stats();
+      const cachedData = scripts[0].createCachedData();
+      const accepted = new Script(Buffer.from(text).toString(), { ...options, cachedData });
+      assert.equal(accepted.cachedDataRejected, false);
+      assert.equal(shared(first, accepted.runInNewContext({ value: "data" })), false);
+      assert.equal(stats().hits, beforeData.hits);
+      scripts.length = 0;
+      Bun.gc(true);
+      const afterGC = compile("after-gc");
+      assert.equal(shared(first, afterGC), true);
+      assert.equal(afterGC()[0], "after-gc");
+      assert.ok(stats().bytes <= stats().limit);
+      console.log("ok");
+    `);
+  });
+
+  test.concurrent.each(["é", "λ🚀"])(
+    "shares source buffers on compileFunction compilation-cache hits: %s",
+    async marker => {
+      await runCacheFixture(`
+      import assert from "node:assert/strict";
+      import { compileFunction, createContext } from "node:vm";
+      import { sourcesShareBackingStore as shared, nodeVMCompilationCacheStats as stats } from "bun:internal-for-testing";
+      const body = "/* " + ${JSON.stringify(marker)} + " " + Buffer.alloc(8192, "x").toString() + " */\\nreturn [value, new Error().stack];";
+      const compile = (value, extra = {}) => compileFunction(Buffer.from(body).toString(), [], {
+        filename: "shared-fn.js", lineOffset: 10, parsingContext: createContext({ value }), ...extra,
+      });
+      const seed = compile("seed"); seed();
+      const first = compile("first"); first();
+      const afterPromotion = stats();
+      const second = compile("second");
+      assert.equal(stats().hits, afterPromotion.hits + 1);
+      assert.equal(stats().bytes, afterPromotion.bytes);
+      assert.equal(shared(first, second), true);
+      assert.notEqual(first, second);
+      assert.equal(first()[0], "first");
+      assert.equal(second()[0], "second");
+      assert.match(second()[1], /shared-fn.js:12:/);
+      const other = compile("other", { filename: "other-fn.js", lineOffset: 20 });
+      assert.equal(shared(first, other), false);
+      assert.match(other()[1], /other-fn.js:22:/);
+      Bun.gc(true);
+      assert.equal(shared(first, compile("after-gc")), true);
+      console.log("ok");
+    `);
+    },
+  );
+
+  test.concurrent.each(["é", "λ🚀"])("shared source buffers survive compilation-cache eviction: %s", async marker => {
+    await runCacheFixture(
+      `
+      import assert from "node:assert/strict";
+      import { Script } from "node:vm";
+      import { sourcesShareBackingStore as shared, nodeVMCompilationCacheStats as stats } from "bun:internal-for-testing";
+      const text = "/* " + ${JSON.stringify(marker)} + " " + Buffer.alloc(4096, "x").toString() + " */ (() => 42)";
+      const compile = () => new Script(Buffer.from(text).toString(), { filename: "evicted.js" }).runInThisContext();
+      const seed = compile(); seed();
+      const first = compile(); first();
+      const second = compile();
+      assert.equal(shared(first, second), true);
+      for (let i = 0; i < 80; i++) new Script("(() => " + i + ")", { filename: "churn-" + i + ".js" }).runInThisContext()();
+      assert.ok(stats().evictions > 0);
+      assert.ok(stats().bytes <= stats().limit);
+      Bun.gc(true);
+      assert.equal(first(), 42);
+      assert.equal(second(), 42);
+      assert.equal(shared(first, second), true);
+      const before = stats();
+      const rebuilt = compile();
+      assert.equal(stats().misses, before.misses + 1);
+      assert.equal(shared(first, rebuilt), false);
+      assert.equal(rebuilt(), 42);
+      console.log("ok");
+    `,
+      "32768",
+    );
+  });
+
+  test.concurrent("shared source buffers preserve first-line columns and sourceURL", async () => {
+    await runCacheFixture(`
+      import assert from "node:assert/strict";
+      import { Script } from "node:vm";
+      const text = "(() => new Error().stack)";
+      for (const columnOffset of [0, 9]) {
+        for (let pass = 0; pass < 3; pass++) {
+          const fn = new Script(Buffer.from(text).toString(), { filename: "original.js", lineOffset: 10, columnOffset }).runInThisContext();
+          assert.ok(fn().includes("original.js:11:" + (text.indexOf("new Error") + 1 + columnOffset)));
+        }
+      }
+      for (let pass = 0; pass < 3; pass++) {
+        const fn = new Script(Buffer.from(text + "\\n//# sourceURL=virtual-cache.js").toString(), { filename: "original.js" }).runInThisContext();
+        assert.ok(fn().includes("virtual-cache.js:1:8"));
+      }
+      console.log("ok");
+    `);
+  });
 
   test.concurrent("reuses compilation beyond the shared JSC working set", async () => {
     await runCacheFixture(`
@@ -3174,6 +3311,104 @@ test.concurrent("repeated vm source executes after GC without another parse", as
   const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
   expect(stdout).toBe("42\n");
   expect(stderr.split("CACHE_PROOF_BEGIN\n")).toHaveLength(2);
+  const measured = stderr.split("CACHE_PROOF_BEGIN\n")[1].split("CACHE_PROOF_END");
+  expect(measured).toHaveLength(2);
+  expect(measured[0]).toBe("");
+  expect(exitCode).toBe(0);
+});
+
+test.concurrent("private vm reuse does not eagerly parse unused function bodies", async () => {
+  await using proc = Bun.spawn({
+    cmd: [
+      bunExe(),
+      "-e",
+      `
+      const assert = require("node:assert/strict");
+      const vm = require("node:vm");
+      const source = "(function(){ function cold(){ return 99; } return { hot(){ return 42; }, cold }; })";
+      const hot = () => vm.runInThisContext(source)().hot();
+      assert.equal(hot(), 42);
+      console.error("CACHE_PROOF_BEGIN");
+      assert.equal(hot(), 42);
+      console.error("CACHE_PROOF_END");
+      setImmediate(() => {
+        Bun.gc(true);
+        assert.equal(hot(), 42);
+        assert.equal(vm.runInThisContext(source)().cold(), 99);
+        console.log("ok");
+      });
+    `,
+    ],
+    env: {
+      ...bunEnv,
+      BUN_JSC_reportParseTimes: "1",
+      BUN_JSC_useCodeCache: "false",
+      BUN_VM_COMPILE_CACHE_SIZE: "268435456",
+      BUN_VM_COMPILE_CACHE_THRESHOLD: "0",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect(stdout).toBe("ok\n");
+  expect(stderr.split("CACHE_PROOF_BEGIN\n")).toHaveLength(2);
+  expect(stderr.split("CACHE_PROOF_BEGIN\n")[0]).toContain("Parsed #");
+  const measured = stderr.split("CACHE_PROOF_BEGIN\n")[1].split("CACHE_PROOF_END");
+  expect(measured).toHaveLength(2);
+  expect(measured[0]).toBe("");
+  expect(exitCode).toBe(0);
+});
+
+test.concurrent.each([
+  ["collected root", false, false],
+  ["held root", true, false],
+  ["late nested function", false, true],
+])("private vm bytecode survives GC before reuse (%s)", async (_name, keepRoot, lateNested) => {
+  await using proc = Bun.spawn({
+    cmd: [
+      bunExe(),
+      "-e",
+      `
+      const assert = require("node:assert/strict");
+      const vm = require("node:vm");
+      const lateNested = ${lateNested};
+      const source = lateNested
+        ? "(function(){ return function cold(){ return 99; }; })"
+        : "(function(){ function cold(){ return 99; } return 42; })";
+      globalThis.originalScript = ${keepRoot} ? new vm.Script(source) : null;
+      const run = () => vm.runInThisContext(source)();
+      if (lateNested) {
+        assert.equal(99, 99);
+        run();
+        run();
+      } else {
+        assert.equal(globalThis.originalScript ? globalThis.originalScript.runInThisContext()() : run(), 42);
+      }
+      for (let i = 0; i < 3; i++) {
+        await new Promise(setImmediate);
+        Bun.gc(true);
+        if (i === 2) console.error("CACHE_PROOF_BEGIN");
+        assert.equal(lateNested ? run()() : run(), lateNested ? 99 : 42);
+        if (i === 2) console.error("CACHE_PROOF_END");
+        globalThis.originalScript = null;
+      }
+      console.log("ok");
+    `,
+    ],
+    env: {
+      ...bunEnv,
+      BUN_JSC_reportParseTimes: "1",
+      BUN_JSC_useCodeCache: "false",
+      BUN_VM_COMPILE_CACHE_SIZE: "268435456",
+      BUN_VM_COMPILE_CACHE_THRESHOLD: "0",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect(stdout).toBe("ok\n");
+  expect(stderr.split("CACHE_PROOF_BEGIN\n")).toHaveLength(2);
+  expect(stderr.split("CACHE_PROOF_BEGIN\n")[0]).toContain("Parsed #");
   const measured = stderr.split("CACHE_PROOF_BEGIN\n")[1].split("CACHE_PROOF_END");
   expect(measured).toHaveLength(2);
   expect(measured[0]).toBe("");

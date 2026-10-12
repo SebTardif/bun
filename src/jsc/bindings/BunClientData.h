@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 // A counted reference to a VM's handle (bun_jsc::VmHandle): what any thread other than the
 // VM's own uses to post work to it, keep its loop alive, or ask whether it may still run
 // script. retain / retainRef take a count, release gives one up; valid however long it is held.
@@ -43,8 +45,11 @@ inline bool Bun__VmHandle__scriptAllowedInline(const unsigned char* state)
 }
 // JS thread only: adjust the keep-alive of the VM this thread runs.
 extern "C" void Bun__eventLoop__refKeepAlive(void* bunVM, int delta);
+extern "C" size_t Bun__Node__maxOldSpaceSizeMiB();
 
 namespace WebCore {
+
+class MainHeapLimitObserver;
 
 class ExtendedDOMClientIsoSubspaces;
 class ExtendedDOMIsoSubspaces;
@@ -72,6 +77,7 @@ class DOMWrapperWorld;
 #include "JSCTaskScheduler.h"
 #include "HTTPHeaderIdentifiers.h"
 #include "BunCommonStrings.h"
+#include "BunCPUProfiler.h"
 #include "DOMURLBaseCache.h"
 #include "NodeVMOptionNames.h"
 #include "NodeVMSourceOriginCache.h"
@@ -177,6 +183,7 @@ public:
 
     // `worker` is the WorkerMessagingProxy this VM is being created for, or null on the main thread.
     static void create(JSC::VM*, void* bunVM, WorkerMessagingProxy* worker);
+    void installMainHeapLimit(JSC::VM&, size_t bytes);
 
     JSHeapData& heapData() { return *m_heapData; }
     BunBuiltinNames& builtinNames() { return m_builtinNames; }
@@ -202,6 +209,7 @@ public:
 
     // Public so Bun::commonStrings(vm) below is a static_cast and a member load.
     Bun::CommonStrings commonStrings;
+    Bun::CPUProfilerState cpuProfilerState;
 
     WebCore::DOMURLBaseCache& urlBaseCache() { return m_urlBaseCache; }
     Bun::NodeVMOptionNames& nodeVMOptionNames() { return m_nodeVMOptionNames; }
@@ -266,6 +274,7 @@ public:
 
 private:
     bool isWebCoreJSClientData() const final { return true; }
+    std::unique_ptr<MainHeapLimitObserver> m_mainHeapLimitObserver;
     std::unique_ptr<JSC::DecoderStringTable> m_decoderStringTable;
     RefPtr<JSC::PrelinkedModuleGraph> m_prelinkedModuleGraph;
     bool m_prelinkedModuleGraphChecked { false };

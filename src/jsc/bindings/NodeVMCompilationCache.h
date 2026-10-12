@@ -50,11 +50,14 @@ public:
     ~NodeVMCompilationCache();
     bool isActive() const { return m_statistics.active; }
     void observeCompilation(JSC::JSGlobalObject*, const JSC::SourceCode&, const Identity&, bool hasCachedData, JSC::UnlinkedProgramCodeBlock*);
-    JSC::UnlinkedProgramCodeBlock* getOrCompile(JSC::JSGlobalObject*, JSC::ProgramExecutable*, const JSC::SourceCode&, const Identity&, bool hasCachedData, JSC::ParserError&);
+    JSC::UnlinkedProgramCodeBlock* getOrCompile(JSC::JSGlobalObject*, JSC::ProgramExecutable*&, JSC::SourceCode&, const Identity&, bool hasCachedData, JSC::ParserError&);
     RefPtr<JSC::CachedBytecode> bytecode(const JSC::SourceCode&, const Identity&);
     const Statistics& statistics();
 
 private:
+    enum class Promotion : uint8_t { None,
+        Snapshot,
+        Full };
     struct Entry : WTF::BasicRawSentinelNode<Entry> {
         unsigned hash;
         Identity identity;
@@ -63,7 +66,8 @@ private:
         JSC::Weak<JSC::JSCell> importer;
         bool hasImporter;
         bool fullBytecode { false };
-        bool promotionAttempted { false };
+        bool hasUncachedFunctions { false };
+        Promotion promotionAttempted { Promotion::None };
         RefPtr<JSC::CachedBytecode> bytecode;
         JSC::Weak<JSC::UnlinkedProgramCodeBlock> decoded;
         size_t bytes;
@@ -78,7 +82,7 @@ private:
     bool admit(const JSC::SourceCode&);
     Entry* find(const JSC::SourceCode&, const Identity&);
     void remove(Entry&);
-    void insert(JSC::JSGlobalObject*, const JSC::SourceCode&, const Identity&, JSC::UnlinkedProgramCodeBlock*, bool fullBytecode);
+    void insert(JSC::JSGlobalObject*, const JSC::SourceCode&, const Identity&, JSC::UnlinkedProgramCodeBlock*, Promotion, WTF::String sharedSource = {});
 };
 
 JSC::JSValue createNodeVMCompilationCacheStatsForTesting(Zig::GlobalObject*);
