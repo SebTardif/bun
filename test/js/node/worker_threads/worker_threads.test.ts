@@ -4210,20 +4210,20 @@ describe("inherited NODE_OPTIONS errors", () => {
 });
 
 describe("resourceLimits", () => {
-  test("unspecified limits stay at the sentinel until the worker is ready", async () => {
+  test("initial resource limits snapshot allows unresolved defaults", async () => {
     const worker = new Worker("setInterval(() => {}, 1000)", { eval: true });
     try {
-      expect(worker.resourceLimits).toEqual({
-        maxYoungGenerationSizeMb: -1,
-        maxOldGenerationSizeMb: -1,
-        codeRangeSizeMb: -1,
-        stackSizeMb: 4,
-      });
+      const initial = worker.resourceLimits;
       await once(worker, "online");
       const online = worker.resourceLimits;
-      expect(online.maxYoungGenerationSizeMb).not.toBe(-1);
-      expect(online.maxOldGenerationSizeMb).not.toBe(-1);
-      expect(online.codeRangeSizeMb).not.toBe(-1);
+      // The child can publish resolved limits before the parent receives online.
+      expect([-1, online.maxYoungGenerationSizeMb]).toContain(initial.maxYoungGenerationSizeMb);
+      expect([-1, online.maxOldGenerationSizeMb]).toContain(initial.maxOldGenerationSizeMb);
+      expect([-1, online.codeRangeSizeMb]).toContain(initial.codeRangeSizeMb);
+      expect(initial.stackSizeMb).toBe(4);
+      expect(online.maxYoungGenerationSizeMb).toBeGreaterThanOrEqual(0);
+      expect(online.maxOldGenerationSizeMb).toBeGreaterThanOrEqual(0);
+      expect(online.codeRangeSizeMb).toBeGreaterThanOrEqual(0);
       expect(online.stackSizeMb).toBe(4);
     } finally {
       await worker.terminate();
@@ -4231,7 +4231,7 @@ describe("resourceLimits", () => {
     }
   });
 
-  test("explicit resource limits are visible before the worker is online", async () => {
+  test("initial resource limits snapshot preserves explicit limits", async () => {
     const requested = {
       maxYoungGenerationSizeMb: 8,
       maxOldGenerationSizeMb: 64,
@@ -4245,15 +4245,23 @@ describe("resourceLimits", () => {
     });
     try {
       expect(worker.resourceLimits).toEqual(requested);
-      expect(partial.resourceLimits).toEqual({
-        maxYoungGenerationSizeMb: -1,
-        maxOldGenerationSizeMb: 64,
-        codeRangeSizeMb: -1,
-        stackSizeMb: 4,
-      });
+      const initial = partial.resourceLimits;
+      await Promise.all([once(worker, "online"), once(partial, "online")]);
+      expect(worker.resourceLimits).toEqual(requested);
+      const online = partial.resourceLimits;
+      expect([-1, online.maxYoungGenerationSizeMb]).toContain(initial.maxYoungGenerationSizeMb);
+      expect([-1, online.codeRangeSizeMb]).toContain(initial.codeRangeSizeMb);
+      expect(initial.maxOldGenerationSizeMb).toBe(64);
+      expect(initial.stackSizeMb).toBe(4);
+      expect(online.maxYoungGenerationSizeMb).toBeGreaterThanOrEqual(0);
+      expect(online.codeRangeSizeMb).toBeGreaterThanOrEqual(0);
+      expect(online.maxOldGenerationSizeMb).toBe(64);
+      expect(online.stackSizeMb).toBe(4);
     } finally {
       await partial.terminate();
       await worker.terminate();
+      expect(partial.resourceLimits).toEqual({});
+      expect(worker.resourceLimits).toEqual({});
     }
   });
 
