@@ -4292,6 +4292,61 @@ describe("inherited NODE_OPTIONS errors", () => {
 });
 
 describe("resourceLimits", () => {
+  test("initial resource limits snapshot allows unresolved defaults", async () => {
+    const worker = new Worker("setInterval(() => {}, 1000)", { eval: true });
+    try {
+      const initial = worker.resourceLimits;
+      await once(worker, "online");
+      const online = worker.resourceLimits;
+      // The child can publish resolved limits before the parent receives online.
+      expect([-1, online.maxYoungGenerationSizeMb]).toContain(initial.maxYoungGenerationSizeMb);
+      expect([-1, online.maxOldGenerationSizeMb]).toContain(initial.maxOldGenerationSizeMb);
+      expect([-1, online.codeRangeSizeMb]).toContain(initial.codeRangeSizeMb);
+      expect(initial.stackSizeMb).toBe(4);
+      expect(online.maxYoungGenerationSizeMb).toBeGreaterThanOrEqual(0);
+      expect(online.maxOldGenerationSizeMb).toBeGreaterThanOrEqual(0);
+      expect(online.codeRangeSizeMb).toBeGreaterThanOrEqual(0);
+      expect(online.stackSizeMb).toBe(4);
+    } finally {
+      await worker.terminate();
+      expect(worker.resourceLimits).toEqual({});
+    }
+  });
+
+  test("initial resource limits snapshot preserves explicit limits", async () => {
+    const requested = {
+      maxYoungGenerationSizeMb: 8,
+      maxOldGenerationSizeMb: 64,
+      codeRangeSizeMb: 16,
+      stackSizeMb: 2,
+    };
+    const worker = new Worker("setInterval(() => {}, 1000)", { eval: true, resourceLimits: requested });
+    const partial = new Worker("setInterval(() => {}, 1000)", {
+      eval: true,
+      resourceLimits: { maxOldGenerationSizeMb: 64 },
+    });
+    try {
+      expect(worker.resourceLimits).toEqual(requested);
+      const initial = partial.resourceLimits;
+      await Promise.all([once(worker, "online"), once(partial, "online")]);
+      expect(worker.resourceLimits).toEqual(requested);
+      const online = partial.resourceLimits;
+      expect([-1, online.maxYoungGenerationSizeMb]).toContain(initial.maxYoungGenerationSizeMb);
+      expect([-1, online.codeRangeSizeMb]).toContain(initial.codeRangeSizeMb);
+      expect(initial.maxOldGenerationSizeMb).toBe(64);
+      expect(initial.stackSizeMb).toBe(4);
+      expect(online.maxYoungGenerationSizeMb).toBeGreaterThanOrEqual(0);
+      expect(online.codeRangeSizeMb).toBeGreaterThanOrEqual(0);
+      expect(online.maxOldGenerationSizeMb).toBe(64);
+      expect(online.stackSizeMb).toBe(4);
+    } finally {
+      await partial.terminate();
+      await worker.terminate();
+      expect(partial.resourceLimits).toEqual({});
+      expect(worker.resourceLimits).toEqual({});
+    }
+  });
+
   test("reads numeric getters in Node order and converts the second value", async () => {
     const calls: string[] = [];
     const values = { maxOldGenerationSizeMb: 64, maxYoungGenerationSizeMb: 16, codeRangeSizeMb: 32, stackSizeMb: 2 };
