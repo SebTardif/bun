@@ -2175,8 +2175,8 @@ function getTestTimeout(testPath: string): number {
 }
 
 /**
- * Streams the output of one child process stream to `io`, without the workflow
- * commands bun test prints because GITHUB_ACTIONS is set (see createLiveOutputFilter).
+ * Streams one child process stream to `io`, keeping file context without nested groups.
+ * See createLiveOutputFilter for CI-specific workflow command handling.
  * spawnWithTimeout calls `end()` when the stream closes.
  */
 function pipeTestStdout(io: NodeJS.WritableStream): ((chunk: string) => void) & { end: () => void } {
