@@ -215,7 +215,9 @@ test("the native test launcher preserves disk snapshots before and after its run
       const snapshot = JSON.parse(readFileSync(path, "utf8"));
       expect(snapshot.stage).toBe(stage);
       expect(snapshot.availableBytes).toBeGreaterThan(0);
-      expect(snapshot.availableInodes).toBeGreaterThan(0);
+      // Container filesystems can report zero inode counters while allowing file creation.
+      expect(Number.isSafeInteger(snapshot.availableInodes)).toBe(true);
+      expect(snapshot.availableInodes).toBeGreaterThanOrEqual(0);
       expect(snapshot.directories.build).toBeGreaterThan(0);
       expect(result.stdout).toContain(`::notice title=Native test disk usage::${JSON.stringify(snapshot)}`);
     }
