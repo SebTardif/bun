@@ -3,10 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, statfsSync, writeF
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 
-export const forkRegressions = [
-  "test/bundler/transpiler/runtime-transpiler.test.ts",
-  "test/js/node/fs/dir.test.ts",
-];
+export const forkRegressions = ["test/bundler/transpiler/runtime-transpiler.test.ts", "test/js/node/fs/dir.test.ts"];
 
 export const smoke = [
   ...forkRegressions,
