@@ -509,8 +509,8 @@ type LiveOutputFilter = ((chunk: string) => string) & { end: () => string };
 /**
  * Creates a filter for the live output of one child process stream, for the CI log.
  *
- * The runner spawns every `bun test` with GITHUB_ACTIONS=true so that bun prints each
- * failure as a `::error` workflow command it can parse, and the file headers as
+ * Serial tests request GITHUB_ACTIONS output; parallel batches inherit it. In that
+ * mode, bun prints failures as `::error` workflow commands and file headers as
  * `::group::` commands. Keep file headers as plain text so captured worker errors retain
  * their file context without nesting the runner's own groups. Other workflow commands
  * are kept only in GitHub Actions, where they become annotations. Buildkite group
