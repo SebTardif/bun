@@ -2961,8 +2961,8 @@ impl TestCommand {
                     // dropping the old preload scopes those BunTests referenced.
                     unsafe { (*bun_test_root_ptr).reset_hook_scope_for_test_isolation(); }
                 }
-                // SAFETY: reporter is caller-owned and remains live through this guard.
                 if Output::is_github_action()
+                    // SAFETY: reporter is caller-owned and remains live through this guard.
                     && unsafe { (*reporter_ptr).worker_ipc_file_idx.is_none() }
                 {
                     pretty_errorln!("<r>\n::endgroup::\n");
