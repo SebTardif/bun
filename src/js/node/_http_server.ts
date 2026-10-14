@@ -354,7 +354,7 @@ function tlsVersionName(version) {
 }
 
 function connectionListener(this: Server, socket) {
-  if (NodeHTTPServerSocket && socket instanceof NodeHTTPServerSocket && !socket[kHandedOff]) return;
+  if (isNodeHTTPServerSocket(socket) && !socket[kHandedOff]) return;
   const tlsOptions = this[tlsSymbol];
   if (!tlsOptions) {
     connectionListenerHTTP1.$call(this, socket);
@@ -386,7 +386,7 @@ function connectionListener(this: Server, socket) {
 }
 
 function secureConnectionListener(this: Server, socket) {
-  if (NodeHTTPServerSocket && socket instanceof NodeHTTPServerSocket && !socket[kHandedOff]) return;
+  if (isNodeHTTPServerSocket(socket) && !socket[kHandedOff]) return;
   connectionListenerHTTP1.$call(this, socket);
 }
 
@@ -1843,6 +1843,7 @@ function getNodeHTTPServerSocket() {
     #resetSupported;
     #closeError: Error | undefined = undefined;
     declare encrypted: boolean;
+    declare isServer?: boolean;
     declare resetAndClosing: boolean;
     declare _writableState: { emitClose: boolean; decodeStrings: boolean };
     declare _readableState: { emitClose: boolean };
@@ -1871,6 +1872,10 @@ function getNodeHTTPServerSocket() {
       handle.duplex = this;
 
       this.encrypted = encrypted;
+      if (encrypted) {
+        this.isServer = true;
+        Object.setPrototypeOf(this, getNodeHTTPTLSServerSocketPrototype());
+      }
       this.on("timeout", onNodeHTTPServerSocketTimeout);
       // Like Node.js's socketOnError: connection errors are routed to the
       // server's 'clientError' event instead of crashing as unhandled 'error'
@@ -2423,6 +2428,42 @@ function getNodeHTTPServerSocket() {
   } as unknown as typeof import("node:net").Socket;
   Object.defineProperty(NodeHTTPServerSocket, "name", { value: "Socket" });
   return NodeHTTPServerSocket;
+}
+
+let NodeHTTPTLSServerSocketPrototype;
+function isNodeHTTPServerSocket(socket) {
+  return !!(
+    NodeHTTPServerSocket &&
+    (socket instanceof NodeHTTPServerSocket ||
+      (socket != null &&
+        NodeHTTPTLSServerSocketPrototype !== undefined &&
+        Object.getPrototypeOf(socket) === NodeHTTPTLSServerSocketPrototype))
+  );
+}
+
+function getNodeHTTPTLSServerSocketPrototype() {
+  if (NodeHTTPTLSServerSocketPrototype === undefined) {
+    const { TLSSocket } = require("node:tls");
+    // Keep the native HTTP socket's I/O methods while exposing the TLS socket identity.
+    NodeHTTPTLSServerSocketPrototype = Object.create(TLSSocket.prototype, {
+      ...Object.getOwnPropertyDescriptors(NodeHTTPServerSocket.prototype),
+      ...Object.getOwnPropertyDescriptors({
+        constructor: TLSSocket,
+        getPeerCertificate(detailed) {
+          const handle = this[kHandle];
+          if (!handle || handle.closed) return null;
+          return (arguments.length < 1 ? handle.getPeerCertificate() : handle.getPeerCertificate(!detailed)) || {};
+        },
+        getCipher() {
+          return this[kHandle]?.getCipher();
+        },
+        getProtocol() {
+          return this[kHandle]?.getTLSVersion() ?? null;
+        },
+      }),
+    });
+  }
+  return NodeHTTPTLSServerSocketPrototype;
 }
 
 // Node validates the `Trailer` header inside _storeHeader, after the body framing has
@@ -2997,7 +3038,7 @@ function releasePipelineOutgoingData(socket, bytes) {
     const response = socket[kHandle]?.response;
     if (response) {
       response.resume();
-    } else if (!(NodeHTTPServerSocket && socket instanceof NodeHTTPServerSocket)) {
+    } else if (!isNodeHTTPServerSocket(socket)) {
       // Fallback duplex paused by maybePauseFallbackReads: plain stream flow
       // control is the only way to restart it.
       socket.resume();
@@ -3097,7 +3138,7 @@ function abortQueuedPipelinedResponses(socket, error = $ERR_STREAM_DESTROYED("wr
 
 // The head of the queue can never be sent: close once the bytes of the responses ahead of it have left.
 function closeAfterLastSendableResponse(socket) {
-  if (NodeHTTPServerSocket && socket instanceof NodeHTTPServerSocket) {
+  if (isNodeHTTPServerSocket(socket)) {
     socket[kHandle]?.closeWhenDrained();
   } else if (!socket.destroyed) {
     socket.destroy();
@@ -3166,7 +3207,7 @@ function advanceResponsePipeline(server, socket) {
 
   queue.shift();
 
-  if (NodeHTTPServerSocket && socket instanceof NodeHTTPServerSocket) {
+  if (isNodeHTTPServerSocket(socket)) {
     const socketHandle = socket[kHandle];
     if (
       !socketHandle ||
