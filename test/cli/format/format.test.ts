@@ -6753,7 +6753,8 @@ describe("bun fmt on Windows, macOS and Linux", () => {
       "a project in a directory with blanks, `#`, `%41` and letters that are not ASCII",
       async () => {
         using dir = tempDir("bun fmt #1 %41 é 日本", {
-          ".prettierrc.mjs": `import shared from "./my configs/shared#1.mjs";\nexport default { ...shared };\n`,
+          // Node-compatible ESM uses %23 for a literal # in the imported filename.
+          ".prettierrc.mjs": `import shared from "./my configs/shared%231.mjs";\nexport default { ...shared };\n`,
           "my configs/shared#1.mjs": "export default { semi: false };\n",
           "sources é/ü 100%.js": formatted,
           "sources é/中文.js": formatted,
