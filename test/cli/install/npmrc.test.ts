@@ -4802,7 +4802,8 @@ describe.concurrent("registry credentials from $VAR env references", () => {
     };
     delete testEnv.UNSET_TOKEN_41044;
     await using proc = Bun.spawn({
-      cmd: [bunExe(), "run", "index.ts"],
+      // The fork keeps runtime auto-install opt-in.
+      cmd: [bunExe(), "--install=auto", "run", "index.ts"],
       cwd: String(dir),
       env: testEnv as Record<string, string>,
       stdout: "pipe",

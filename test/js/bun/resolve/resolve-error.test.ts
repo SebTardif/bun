@@ -3,10 +3,8 @@ import { bunEnv, bunExe, isWindows, normalizeBunSnapshot, tempDir } from "harnes
 import path from "node:path";
 
 describe("ResolveMessage", () => {
-  it("carries what the resolver logged while failing as notes", async () => {
-    // The resolver records the reason it gave up (here: the dependency's
-    // package.json does not parse) in the log of the failing resolve. That
-    // used to be discarded, leaving a bare "Cannot find package".
+  it("preserves invalid package config errors instead of missing-package errors", async () => {
+    // Preserve the fork's Node-compatible invalid-package error and the offending path.
     using dir = tempDir("resolve-error-notes", {
       "index.js": `import "badjson";\n`,
       "node_modules/badjson/package.json": `{ "name": "badjson", "main":\n`,
@@ -21,12 +19,8 @@ describe("ResolveMessage", () => {
     const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
     expect(stdout).toBe("");
     expect(normalizeBunSnapshot(stderr, String(dir))).toMatchInlineSnapshot(`
-      "error: Cannot find package 'badjson' from '<dir>/index.js'
-
-      1 | { "name": "badjson", "main":
-                                      ^
-      note: Unexpected end of file
-         at <dir>/node_modules/badjson/package.json:1:29
+      "error: Invalid package config <dir>/node_modules/badjson/package.json while importing \"badjson\" from <dir>/index.js.
+       code: \"ERR_INVALID_PACKAGE_CONFIG\"
 
       Bun v<bun-version>"
     `);

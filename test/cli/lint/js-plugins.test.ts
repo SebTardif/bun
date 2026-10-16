@@ -1096,7 +1096,7 @@ describe.concurrent("bun lint with plugins in JavaScript", () => {
       "error: Cannot use the configuration file <dir>/.oxlintrc.json:
       Failed to load JS plugin: ./broken.mjs
         Error: It cannot start.
-          at <dir>/broken.mjs:1:11"
+          at <dir>/broken.mjs:1:7"
     `);
       expect(nameless.stdout).toMatchInlineSnapshot(`
       "error: Cannot use the configuration file <dir>/.oxlintrc.json:
