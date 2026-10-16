@@ -114,7 +114,8 @@ describe("Worker destruction", () => {
     expect(parts).toHaveLength(2);
     const teardown = parts[1].split("WORKER_TEARDOWN_END\n");
     expect(teardown).toHaveLength(2);
-    const shutdowns = [...teardown[0].matchAll(/\[GC<([^>]+)>: shutdown [^\]]*ms\]/g)];
+    // WebKit added a colon after shutdown; both formats identify the same final sweep.
+    const shutdowns = [...teardown[0].matchAll(/\[GC<([^>]+)>: shutdown:? [^\]]*ms\]/g)];
     expect(shutdowns).toHaveLength(1);
     const collections = [...teardown[0].matchAll(/\[GC<([^>]+)>: START [^\n]*=> FullCollection/g)];
     expect(collections.filter(match => match[1] === shutdowns[0][1])).toHaveLength(0);
