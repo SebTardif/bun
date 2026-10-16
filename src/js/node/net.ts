@@ -599,10 +599,9 @@ function unadoptedTransport(self): SocketInstance | undefined {
   const upgraded = self[kupgraded];
   if (upgraded && !upgraded.destroyed && upgraded._handle?.[kAdoptedTLSRaw] !== self) return upgraded;
 }
-// Node destroys the transport at every close: all writes have completed by then. Here a write completes once the transport has
-// taken the ciphertext, so one that can hold some of the application's is released instead (releaseTransport).
+// A completed exchange can still have accepted ciphertext to drain. Explicit destroy before both halves finish aborts the transport.
 function transportToDestroy(self): SocketInstance | undefined {
-  if (self[kSessionAccepted] !== true) return unadoptedTransport(self);
+  if (self[kSessionAccepted] !== true || !self.readableEnded || !self.writableFinished) return unadoptedTransport(self);
 }
 // Sessions below one that was never accepted, or is reset, carried nothing else of the application's: they go with it.
 function abortTransport(transport: SocketInstance) {
@@ -2539,7 +2538,15 @@ Socket.prototype._destroy = function _destroy(err, callback) {
   // What closes with this socket clears its own.
   clearTimeout(this[kTimeout]);
   const released = unadoptedTransport(this);
-  if (released !== undefined && !this.resetAndClosing && this[kSessionAccepted] === true) releaseTransport(released);
+  if (
+    released !== undefined &&
+    !this.resetAndClosing &&
+    this[kSessionAccepted] === true &&
+    this.readableEnded &&
+    this.writableFinished
+  ) {
+    releaseTransport(released);
+  }
 
   $debug("close");
   if (this._handle) {
