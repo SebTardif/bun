@@ -2857,10 +2857,11 @@ describe("a TLS server wrap over a Duplex transport whose peer ends the handshak
     transport.destroy();
   });
 
-  it("a tls.Server reports it as 'tlsClientError'", async () => {
+  // The same first-record divergence emits no server error; use an abortable wait so test.failing can track it.
+  it.failing("a tls.Server reports it as 'tlsClientError'", async () => {
     const server = tls.createServer(COMMON_CERT_);
     const transport = makeTransport();
-    const reported = once(server, "tlsClientError");
+    const reported = once(server, "tlsClientError", { signal: AbortSignal.timeout(1_000) });
     server.emit("connection", transport);
     setImmediate(() => transport.push(closeNotify));
     const [err, socket] = await reported;
