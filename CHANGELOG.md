@@ -305,3 +305,5 @@
 - Register the listener passed to `fs.watch()` on the returned watcher's `change` event, preserving listener order and removal. Ports [oven-sh/bun#43765](https://github.com/oven-sh/bun/pull/43765); thanks robobun.
 
 - Return `undefined` for `stat` paths through regular files with `throwIfNoEntry: false`, while preserving `lstat` errors. Ports [oven-sh/bun#39339](https://github.com/oven-sh/bun/pull/39339); thanks robobun.
+
+- Settle child IPC send callbacks after peer disconnection, preserving immediate write errors and completing queued sends at channel close. Adapts [oven-sh/bun#43000](https://github.com/oven-sh/bun/pull/43000); thanks robobun.
