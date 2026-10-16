@@ -3740,3 +3740,29 @@ describe("compilation-cache source security metadata", () => {
     runMetadataFixture,
   );
 });
+
+test("source metadata test hooks cannot bypass strict code generation", async () => {
+  using dir = tempDir("vm-cache-source-strict", {
+    "fixture.mjs": `
+      import assert from "node:assert/strict";
+      import { runNodeVMSource } from "bun:internal-for-testing";
+      for (const mode of [0, 1, 2]) {
+        assert.throws(() => runNodeVMSource("42", 0, 0, true, mode), { name: "EvalError" });
+      }
+      console.log("ok");
+    `,
+  });
+  await using proc = Bun.spawn({
+    cmd: [
+      bunExe(),
+      "--disallow-code-generation-from-strings=strict",
+      "--expose-internals",
+      join(String(dir), "fixture.mjs"),
+    ],
+    env: bunEnv,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+});

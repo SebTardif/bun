@@ -2,6 +2,7 @@
 #include "GCDefferalContext.h"
 #include "BunClientData.h"
 #include "NodeVM.h"
+#include "CodeGenerationFromStrings.h"
 #include "NodeVMScriptFetcher.h"
 #include <JavaScriptCore/CodeCache.h>
 #include <JavaScriptCore/BytecodeCacheError.h>
@@ -489,6 +490,7 @@ JSValue NodeVMCompilationCache::testSource(JSGlobalObject* globalObject, CallFra
 {
     auto& vm = globalObject->vm();
     auto scope = DECLARE_THROW_SCOPE(vm);
+    THROW_AND_RETURN_IF_CODE_GENERATION_FROM_STRINGS_IS_STRICT(globalObject, scope, {});
     String text = callFrame->argument(0).toWTFString(globalObject);
     RETURN_IF_EXCEPTION(scope, {});
     SourceTaintedness taintedness;
