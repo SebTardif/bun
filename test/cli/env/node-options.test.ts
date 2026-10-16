@@ -357,27 +357,30 @@ describe("NODE_OPTIONS environment variable", () => {
     expect(exitCode).toBe(0);
   });
 
-  test.each(["", "--title=from-bun"])("install separates injected options from CLI errors with BUN_OPTIONS=%s", async bunOptions => {
-    using dir = tempDir("node-options-install-boundary", {
-      "package.json": `{"name":"x","version":"1.0.0"}`,
-    });
-    const outcomes = [];
-    for (const args of [[], ["--not-a-real-install-flag"]]) {
-      await using proc = Bun.spawn({
-        cmd: [bunExe(), "install", ...args],
-        env: { ...bunEnv, NODE_OPTIONS: "--title=from-node", BUN_OPTIONS: bunOptions },
-        cwd: String(dir),
-        stdout: "pipe",
-        stderr: "pipe",
+  test.each(["", "--title=from-bun"])(
+    "install separates injected options from CLI errors with BUN_OPTIONS=%s",
+    async bunOptions => {
+      using dir = tempDir("node-options-install-boundary", {
+        "package.json": `{"name":"x","version":"1.0.0"}`,
       });
-      const [, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
-      outcomes.push({ stderr, exitCode });
-    }
-    expect(outcomes[0].exitCode).toBe(0);
-    expect(outcomes[0].stderr).not.toContain("has no");
-    expect(outcomes[1].exitCode).toBe(1);
-    expect(outcomes[1].stderr).toContain("bun install has no --not-a-real-install-flag flag");
-  });
+      const outcomes = [];
+      for (const args of [[], ["--not-a-real-install-flag"]]) {
+        await using proc = Bun.spawn({
+          cmd: [bunExe(), "install", ...args],
+          env: { ...bunEnv, NODE_OPTIONS: "--title=from-node", BUN_OPTIONS: bunOptions },
+          cwd: String(dir),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+        outcomes.push({ stderr, exitCode });
+      }
+      expect(outcomes[0].exitCode).toBe(0);
+      expect(outcomes[0].stderr).not.toContain("has no");
+      expect(outcomes[1].exitCode).toBe(1);
+      expect(outcomes[1].stderr).toContain("bun install has no --not-a-real-install-flag flag");
+    },
+  );
 
   // The injected tokens shift argv. Subcommands that index raw argv must
   // skip the injected window, or they read their own keyword as an argument.
