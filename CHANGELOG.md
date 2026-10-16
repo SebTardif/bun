@@ -300,3 +300,5 @@
 - Release completed `node:worker_threads` Worker user listeners and captured caller state while preserving internal port hooks to avoid delayed owner-exit memory release on Windows ARM64.
 
 - Register the listener passed to `fs.watch()` on the returned watcher's `change` event, preserving listener order and removal. Ports [oven-sh/bun#43765](https://github.com/oven-sh/bun/pull/43765); thanks robobun.
+
+- Return `undefined` for `stat` paths through regular files with `throwIfNoEntry: false`, while preserving `lstat` errors. Ports [oven-sh/bun#39339](https://github.com/oven-sh/bun/pull/39339); thanks robobun.
