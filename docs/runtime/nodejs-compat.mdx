@@ -57,11 +57,17 @@ Relative and URL-rooted absolute ESM specifiers decode URL escapes, including im
 
 ### [`node:fs`](https://nodejs.org/api/fs.html)
 
+The listener passed to `fs.watch()` is a `change` listener on the returned `FSWatcher`, including for listener inspection, removal, and manually emitted events.
+
+`statSync()`, `stat()`, and `promises.stat()` return `undefined` for `ENOENT` or `ENOTDIR` with `throwIfNoEntry: false`. `lstat` preserves `ENOTDIR`, matching Node.js.
+
 On macOS, `fs.watch(file)` registers a kqueue watch before returning, including unlink and writes through an open descriptor. Pending file events coalesce until JavaScript delivery, with libuv's event precedence. Directory watches use FSEvents. A new watch on a replaced file observes the new inode.
 
 Recursive `fs.promises.readdir` with `withFileTypes: true` lists directory symlinks without descending into their targets. Callback and synchronous Dirent overloads, and all recursive string overloads, follow directory symlinks on Windows and POSIX.
 
 The `read`, `readv`, `write`, and `writev` callbacks receive the error, zero bytes, and the original buffer or buffers when an I/O operation fails.
+
+`FileHandle.close` stays bound to its handle when called through a Proxy or detached from the object. Closing it disarms garbage-collection cleanup for that handle.
 
 `readSync`, callback `read`, `FileHandle.read`, `writeSync`, and callback `write` preserve Node's overload-specific defaults for explicit `undefined` and `null`. Synchronous and callback reads coerce positional lengths to signed 32-bit integers; `FileHandle.read` defaults nullish lengths to the remaining buffer. Read positions are validated even for zero-length reads.
 
@@ -70,6 +76,8 @@ The `read`, `readv`, `write`, and `writev` callbacks receive the error, zero byt
 On macOS, `fs.copyFile` and `fs.cp` accept regular-file `/dev/fd` sources without advancing the original descriptor's offset.
 
 ### [`node:http`](https://nodejs.org/api/http.html)
+
+`ServerResponse.cork()` retains writes until uncork or end. Response and raw socket writes share the socket Writable queue while corked or draining, preserving their order and backpressure. Response and socket cork counts match Node.js.
 
 `ServerResponse.writableFinished` stays false while a standalone response has output queued on its assigned socket.
 
@@ -88,6 +96,8 @@ Upgrade requests emit `upgrade` while an earlier response on the connection is s
 🟡 `request`, `get`, `Agent` and `globalAgent` are implemented, including connection pooling. Client sockets are `tls.TLSSocket`s. `https.Server` is `http.Server` with TLS options rather than a `tls.Server`. Its request sockets (`req.socket`) are `tls.TLSSocket`s with `encrypted`, `authorized`, `servername`, `getPeerCertificate()`, `getCipher()` and `getProtocol()`. `setSecureContext()`, `addContext()`, `SNICallback` and `handshakeTimeout` are not supported.
 
 ### [`node:os`](https://nodejs.org/api/os.html)
+
+`availableParallelism()` uses the native CPU count even if the global `navigator` object is deleted, replaced, or redefined.
 
 🟢 Fully implemented. `userInfo()` reads `username`, `shell` and `homedir` from the environment (`USER`, `SHELL`, `HOME`) rather than the passwd database. `machine()` returns `"arm64"` instead of `"aarch64"` on Linux arm64.
 
@@ -145,6 +155,8 @@ With the pinned OpenClaw WebKit, module resolution, loading, and evaluation pres
 
 ### [`node:child_process`](https://nodejs.org/api/child_process.html)
 
+IPC send callbacks settle when the peer disconnects. A send rejected by the initial native write reports its write error; sending after the disconnect event reports `ERR_IPC_CHANNEL_CLOSED`. Queued writes complete on channel close as in Node.js.
+
 Destroying child stdin cancels a pending write before the child exits. The write callback reports `ECANCELED`, while the stream preserves the error passed to `destroy(error)`.
 If no write is pending, destruction keeps the graceful close path so buffered short writes can flush.
 
@@ -175,6 +187,8 @@ Child construction publishes the `child_process` diagnostics channel with the ex
 🟢 Client & server are implemented. 94% of Node.js's test suite passes. The `maxDeflateDynamicTableSize`, `peerMaxConcurrentStreams` and `streamResetBurst`/`streamResetRate` options are accepted but ignored.
 
 ### [`node:module`](https://nodejs.org/api/module.html)
+
+`SourceMap.findEntry()` finds the closest preceding generated mapping using zero-based coordinates. `findOrigin()` accepts one-based coordinates and returns `fileName`, `lineNumber`, `columnNumber`, and the optional `name`, matching Node.js.
 
 Filesystem-entry cache snapshots are synchronized across worker threads during symlink fills, file-descriptor updates, and re-stats. Cached module paths remain complete when workers resolve symlinked files while filesystem routes reload.
 
@@ -332,6 +346,8 @@ Valid `vm.Script` cached data is accepted when JSC runs without a JIT. Validatio
 🟡 Partially implemented. `WASI` supports `args`, `env`, `preopens`, `wasiImport` and `start()`, and `bun ./program.wasm` runs a WASI command directly. Missing `getImportObject()` (use `wasiImport`), `initialize()` and the `sock_accept` import. Bun ignores the `version`, `returnOnExit`, `stdin`, `stdout` and `stderr` options, so `proc_exit` exits the Bun process.
 
 ### [`node:worker_threads`](https://nodejs.org/api/worker_threads.html)
+
+Worker termination and natural exit close FileHandles opened by the Worker. Raw descriptors from `fs.open()` and `fs.openSync()` close by default; `trackUnmanagedFds: false` preserves them. Parent-owned descriptors remain open. FileHandle transfer through `postMessage()` remains unsupported.
 
 Worker shutdown releases the thread's native event-name cache after destroying its VM.
 
