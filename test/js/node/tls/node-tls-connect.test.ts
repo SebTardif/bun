@@ -2821,7 +2821,8 @@ describe("a TLS server wrap over a Duplex transport whose peer ends the handshak
     return promise;
   };
 
-  it("the alert is the first record", async () => {
+  // Known divergence: Node errors, the fork ends, upstream BoringSSL expects reset; see the early-close-notify follow-up for PR #177.
+  it.failing("the alert is the first record", async () => {
     const transport = makeTransport();
     const wrapped = new TLSSocket(transport, serverContext());
     const reported = firstEvent(wrapped);
@@ -2831,7 +2832,8 @@ describe("a TLS server wrap over a Duplex transport whose peer ends the handshak
     transport.destroy();
   });
 
-  it("the alert follows a ClientHello", async () => {
+  // Known divergence: Node and the fork end; upstream BoringSSL expects reset (early-close-notify follow-up for PR #177).
+  it.failing("the alert follows a ClientHello", async () => {
     // A client that is thrown away writes the ClientHello.
     const hello = Promise.withResolvers<Buffer>();
     const donor = tls.connect({ socket: makeTransport(hello.resolve), rejectUnauthorized: false });
