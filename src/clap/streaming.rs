@@ -156,7 +156,7 @@ where
                     }));
                 }
 
-                if self.unknown_long_flags_are_errors && !self.iter.last_is_from_bun_options() {
+                if self.unknown_long_flags_are_errors && !self.iter.last_is_from_options_env() {
                     return Err(self.err(arg, None, Some(name), ArgError::InvalidArgument));
                 }
 

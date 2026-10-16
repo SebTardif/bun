@@ -385,7 +385,7 @@ pub struct ParseOptions<'a> {
     /// place among the others. For a command that hands flags on: `bun check --strict`. Otherwise
     /// such a flag is skipped.
     pub unknown_long_flags_are_positional: bool,
-    /// Such a flag fails the parse, unless it comes from `BUN_OPTIONS`, which is for every command.
+    /// Such a flag fails the parse, unless it comes from runtime options in the environment.
     pub unknown_long_flags_are_errors: bool,
 }
 
