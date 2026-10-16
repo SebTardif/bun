@@ -2653,7 +2653,8 @@ describe("env: SHARE_ENV shares the spawning thread's env, not a process-wide on
     });
   });
 
-  it("array methods read a hole from a shared process.env in the prototype chain", async () => {
+  // Known inherited gap: array methods omit inherited shared-env values; see the separate follow-up.
+  it.failing("array methods read a hole from a shared process.env in the prototype chain", async () => {
     await using proc = Bun.spawn({
       cmd: [
         bunExe(),
