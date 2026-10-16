@@ -516,7 +516,7 @@ JSValue NodeVMCompilationCache::testSource(JSGlobalObject* globalObject, CallFra
         return {};
     }
     Strong<UnlinkedProgramCodeBlock> protectedBlock(vm, block);
-    NakedPtr<Exception> exception;
+    NakedPtr<JSC::Exception> exception;
     JSValue result = evaluate(globalObject, source, block, globalObject, exception);
     if (exception)
         throwException(globalObject, scope, exception);

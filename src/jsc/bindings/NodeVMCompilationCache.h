@@ -106,4 +106,6 @@ private:
 
 JSC::JSValue createNodeVMCompilationCacheStatsForTesting(Zig::GlobalObject*);
 JSC::JSValue createNodeVMCompilationCachePolicyTest(Zig::GlobalObject*);
+JSC_DECLARE_HOST_FUNCTION(jsRunNodeVMSourceForTesting);
+JSC_DECLARE_HOST_FUNCTION(jsNodeVMSourceMetadataForTesting);
 }
