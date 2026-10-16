@@ -64,6 +64,8 @@ pub(crate) struct UpgradedDuplex {
     pub pending_shutdown: Cell<bool>,
     /// `pause_stream` paused the wrapped stream and `resume_stream` has not run since.
     paused_origin: Cell<bool>,
+    /// Socket shutdown can still be draining queued ciphertext after `end()`.
+    is_node_socket: bool,
 }
 
 bun_event_loop::impl_timer_owner!(UpgradedDuplex; from_timer_ptr => event_loop_timer);
@@ -292,8 +294,14 @@ impl UpgradedDuplex {
         if teardown {
             // A readable EOF still permits close_notify while the transport is writable.
             // Node ends no destroyed stream.
-            // A pending end still needs its write error to finish, as with Node JSStreamSocket.
-            for property in ["writableFinished", "destroyed"] {
+            // Socket queues must drain without another write-after-FIN error. A generic
+            // Duplex with a pending end still needs its write error to complete shutdown.
+            let ended = if self.is_node_socket {
+                "writableEnded"
+            } else {
+                "writableFinished"
+            };
+            for property in [ended, "destroyed"] {
                 match duplex.get(&global, property) {
                     Ok(Some(done)) if done.to_boolean() => return,
                     Ok(_) => {}
@@ -422,6 +430,7 @@ impl UpgradedDuplex {
         global: &JSGlobalObject,
         js_wrapper: JSValue,
         origin: JSValue,
+        is_node_socket: bool,
         handlers: Handlers,
     ) -> UpgradedDuplex {
         js_TLSSocket::duplex_origin_set_cached(js_wrapper, global, origin);
@@ -445,6 +454,7 @@ impl UpgradedDuplex {
             pending_close: Cell::new(false),
             pending_shutdown: Cell::new(false),
             paused_origin: Cell::new(false),
+            is_node_socket,
         }
     }
 

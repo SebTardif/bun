@@ -4751,6 +4751,10 @@ pub(crate) fn js_upgrade_duplex_to_tls(
         .get(global, "socket")?
         .ok_or_else(|| global.throw(format_args!("Expected \"socket\" option")))?;
 
+    let is_node_socket = opts
+        .get(global, "isNodeSocket")?
+        .is_some_and(|value| value.to_boolean());
+
     let mut is_server = false;
     if let Some(is_server_val) = opts.get_truthy(global, "isServer")? {
         is_server = is_server_val.to_boolean();
@@ -4923,6 +4927,7 @@ pub(crate) fn js_upgrade_duplex_to_tls(
             global,
             tls_js_value,
             duplex,
+            is_node_socket,
             UpgradedDuplexHandlers {
                 // SAFETY: `c` is `ctx` below — the live `DuplexUpgradeContext` heap allocation.
                 on_open: |c: *mut ()| {

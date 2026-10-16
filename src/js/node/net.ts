@@ -538,7 +538,7 @@ function onUpgradedEnd(connection, eof) {
 }
 function attachTLSEngine(self, connection, options) {
   self[kAdoptedTLSTransport] = false;
-  const [handle, events] = upgradeDuplexToTLS(connection, options);
+  const [handle, events] = upgradeDuplexToTLS(connection, { ...options, isNodeSocket: connection instanceof Socket });
   connection.on("data", events[0]);
   connection.on("end", onUpgradedEnd.bind(null, connection, events[1]));
   connection.on("drain", events[2]);
@@ -596,7 +596,8 @@ function adoptServerTLS(self, connection, options) {
 // What TLSWrap.prototype.close destroys. The raw twin of an adopted fd closes with that fd instead (closeWithTLSSocket).
 function unadoptedTransport(self): SocketInstance | undefined {
   const upgraded = self[kupgraded];
-  if (upgraded && !upgraded.destroyed && upgraded._handle?.[kAdoptedTLSRaw] !== self) return upgraded;
+  // The adopted raw handle may already be detached by its native close callback.
+  if (upgraded && !upgraded.destroyed && !self[kAdoptedTLSTransport]) return upgraded;
 }
 // A completed exchange can still have accepted ciphertext to drain. Explicit destroy before both halves finish aborts the transport.
 function transportToDestroy(self): SocketInstance | undefined {
