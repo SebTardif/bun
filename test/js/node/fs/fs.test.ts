@@ -494,17 +494,17 @@ describe("FileHandle", () => {
   it("FileHandle#createReadStream", async () => {
     await using fd = await fs.promises.open(__filename);
     const readable = fd.createReadStream();
-    const data = await new Promise(resolve => {
-      let data = "";
+    const data = await new Promise<Buffer>(resolve => {
+      const chunks: Buffer[] = [];
       readable.on("data", chunk => {
-        data += chunk;
+        chunks.push(chunk);
       });
       readable.on("end", () => {
-        resolve(data);
+        resolve(Buffer.concat(chunks));
       });
     });
 
-    expect(data).toBe(readFileSync(__filename, "utf8"));
+    expect(data).toEqual(readFileSync(__filename));
   });
 
   it("FileHandle#writeFile", async () => {
