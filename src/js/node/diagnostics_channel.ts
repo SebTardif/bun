@@ -8,6 +8,7 @@ const SafeFinalizationRegistry = FinalizationRegistry;
 
 const ArrayPrototypeAt = Array.prototype.at;
 const ArrayPrototypeIndexOf = Array.prototype.indexOf;
+const ArrayPrototypePush = Array.prototype.push;
 const ArrayPrototypeSlice = Array.prototype.slice;
 const ArrayPrototypeSplice = Array.prototype.splice;
 const ObjectGetPrototypeOf = Object.getPrototypeOf;
@@ -100,9 +101,8 @@ class ActiveChannel {
   subscribe(subscription) {
     validateFunction(subscription, "subscription");
 
-    // Copy on write keeps callbacks from changing an in-flight publication's recipients.
     this._subscribers = ArrayPrototypeSlice.$call(this._subscribers);
-    $arrayPush(this._subscribers, subscription);
+    ArrayPrototypePush.$call(this._subscribers, subscription);
     channels.incRef(this.name);
   }
 

@@ -12,6 +12,7 @@ import {
   isLinux,
   isMacOS,
   isPosix,
+  isRoot,
   isWindows,
   libcPathForDlopen,
   shellExe,
@@ -1177,7 +1178,7 @@ describe("close handling", () => {
       await using proc = spawn({
         cmd: [bunExe(), "-e", "process.stdout.write('ok')"],
         env: bunEnv,
-        stdio: ["ignore", "pipe", "pipe", new Blob([])],
+        stdio: ["ignore", "pipe", "pipe", new Blob([]) as any],
       });
       const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
       expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok", stderr: "", exitCode: 0 });
@@ -1211,7 +1212,7 @@ describe("close handling", () => {
           spawn({
             cmd: [bunExe(), "-e", ""],
             env: bunEnv,
-            stdio: ["ignore", "pipe", "pipe", make()],
+            stdio: ["ignore", "pipe", "pipe", make() as any],
           }),
         ).toThrow(msg);
       });
@@ -1222,8 +1223,8 @@ describe("close handling", () => {
         spawn({
           cmd: [bunExe(), "-e", ""],
           env: bunEnv,
-          // @ts-expect-error — intentionally invalid at index 0
-          stdio: ["socket-fd", "pipe", "pipe"],
+          // intentionally invalid at index 0
+          stdio: ["socket-fd" as any, "pipe", "pipe"],
         }),
       ).toThrow("'socket-fd' is only supported at indices >= 3");
     });
@@ -1635,7 +1636,7 @@ it.if(isWindows)("handles duplicated for Bun.file(fd).stream() are not inherited
     await using control = spawnHandleCounter();
 
     const before = ownHandleCount();
-    for (const fd of fds) readers.push(Bun.file(fd).stream().getReader());
+    for (const fd of fds) readers.push(Bun.file(fd).stream().getReader() as ReadableStreamDefaultReader<Uint8Array>);
     // getReader() starts the stream, which dup()s the descriptor: the
     // duplicates exist in this process while the next child is created.
     expect(ownHandleCount() - before).toBeGreaterThanOrEqual(N);
@@ -1853,8 +1854,6 @@ describe("option combinations", () => {
 });
 
 describe("uid/gid", () => {
-  const isRoot = process.getuid?.() === 0;
-
   it.if(isPosix && isRoot)("applies uid and gid to the child", async () => {
     await using proc = spawn({ cmd: ["id", "-u"], uid: 65534, gid: 65534, stdout: "pipe" });
     const [stdout, exitCode] = await Promise.all([proc.stdout.text(), proc.exited]);
