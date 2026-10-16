@@ -194,6 +194,50 @@ async function run(args: string[], env: Record<string, string> = {}) {
   return { stdout, stderr, exitCode };
 }
 
+// A late import in a fresh process exercises the async transpiler without plugin or module hooks.
+test.each([
+  ["default", [], false],
+  ["Node flag", [flag], false],
+  ["strict", [strict], true],
+] as const)("unhooked data imports preserve provenance with %s", async (_name, args, rejects) => {
+  using dir = tempDir("disallow-unhooked-data", {
+    "main.mjs": `
+      globalThis.evaluations = 0;
+      const source = "globalThis.evaluations++; export default 2;";
+      const url = "data:text/javascript," + encodeURIComponent(source);
+      setImmediate(async () => {
+        const results = [];
+        for (const specifier of [url, url, url + "%0A%2F%2Ffresh"]) {
+          try {
+            results.push({ value: (await import(specifier)).default, evaluations: globalThis.evaluations });
+          } catch (error) {
+            results.push({ name: error.name, message: error.message, evaluations: globalThis.evaluations });
+          }
+        }
+        console.log(JSON.stringify(results));
+      });
+    `,
+  });
+  await using proc = Bun.spawn({
+    cmd: [bunExe(), ...args, "main.mjs"],
+    cwd: String(dir),
+    env: { ...bunEnv, NODE_COMPILE_CACHE: "", BUN_OPTIONS: "", NODE_OPTIONS: "" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect({ stderr, exitCode }).toEqual({ stderr: "", exitCode: 0 });
+  expect(JSON.parse(stdout)).toEqual(
+    rejects || builtStrict
+      ? Array.from({ length: 3 }, () => ({
+          name: "EvalError",
+          message: "Code generation from strings disallowed for this context",
+          evaluations: 0,
+        }))
+      : [1, 1, 2].map(evaluations => ({ value: 2, evaluations })),
+  );
+});
+
 const all = (names: string[], value: unknown) => Object.fromEntries(names.map(name => [name, value]));
 const evalAndFunction = {
   directEval: 2,

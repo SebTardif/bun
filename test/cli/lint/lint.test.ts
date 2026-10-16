@@ -10834,7 +10834,7 @@ describe("bun lint on Windows, macOS and Linux", () => {
       "a project in a directory with blanks, `#`, `%41` and letters that are not ASCII",
       async () => {
         using dir = tempDir("bun lint #1 %41 é 日本", {
-          "eslint.config.mjs": `import plugin from "./my plugins/p#1.mjs";
+          "eslint.config.mjs": `import plugin from "./my plugins/p%231.mjs";
           export default [{ ignores: ["my plugins/"] }, { plugins: { p: plugin }, rules: { "p/r": "error", "no-debugger": "error" } }];`,
           "my plugins/p#1.mjs": `export default { rules: { r: { create: context => ({ Identifier: node => context.report({ node, message: "found" }) }) } } };`,
           "sources é/ü 100%.js": "debugger; a;\n",
