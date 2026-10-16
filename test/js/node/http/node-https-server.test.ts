@@ -98,15 +98,19 @@ describe("new https.Server() applies the ALPN defaults of createServer()", () =>
     return out.ALPNProtocols;
   }
 
-  test("defaults ALPNProtocols to http/1.1", () => {
-    const server = new https.Server() as https.Server & { ALPNProtocols?: Buffer; ALPNCallback?: unknown };
+  test("defaults ALPNProtocols to http/1.1", async () => {
+    await using server = new https.Server() as https.Server & { ALPNProtocols?: Buffer; ALPNCallback?: unknown };
     expect(server.ALPNProtocols).toEqual(wire(["http/1.1"]));
     expect(server.ALPNCallback).toBeUndefined();
+    expect(await listen(server)).toBeGreaterThan(0);
   });
 
-  test("keeps an explicit ALPNProtocols", () => {
-    const server = new https.Server({ ALPNProtocols: ["h2", "http/1.1"] }) as https.Server & { ALPNProtocols?: Buffer };
+  test("keeps an explicit ALPNProtocols", async () => {
+    await using server = new https.Server({ ALPNProtocols: ["h2", "http/1.1"] }) as https.Server & {
+      ALPNProtocols?: Buffer;
+    };
     expect(server.ALPNProtocols).toEqual(wire(["h2", "http/1.1"]));
+    expect(await listen(server)).toBeGreaterThan(0);
   });
 
   test("stores ALPNCallback and skips the default protocol list", () => {

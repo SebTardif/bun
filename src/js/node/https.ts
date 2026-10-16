@@ -598,11 +598,12 @@ function Server(options, requestListener): void {
     // ALPN requests are always answered with http/1.1.
     options.ALPNProtocols = ["http/1.1"];
   }
-  http.Server.$call(this, options, requestListener);
   const optionsALPNProtocols = options.ALPNProtocols;
   if (optionsALPNProtocols) {
-    require("node:tls").convertALPNProtocols(optionsALPNProtocols, this);
+    require("node:tls").convertALPNProtocols(optionsALPNProtocols, options);
   }
+  http.Server.$call(this, options, requestListener);
+  this.ALPNProtocols = options.ALPNProtocols;
   this.ALPNCallback = options.ALPNCallback;
   const blockList = options.blockList;
   if (blockList) {
