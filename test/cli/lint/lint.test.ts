@@ -5774,14 +5774,33 @@ maybe(() => { return f; });
       ".eslintrc.json": JSON.stringify({ root: true, rules: { "no-extra-boolean-cast": "error" } }),
       "a.js": `x = ${"!".repeat(45_000)}a;\n`,
     });
-    await using proc = spawn({ cmd: [...command, "--threads", "1", "a.js"], env, cwd: String(dir), stderr: "pipe" });
-    const [stdout, exitCode] = await Promise.all([proc.stdout.text(), proc.exited]);
+    // Linux wait4 includes the spawning process's resident peak before exec. Start
+    // the measured linter from a fresh process so earlier tests do not set its floor.
+    await using proc = spawn({
+      cmd: [
+        bunExe(),
+        "-e",
+        `const child = Bun.spawn(${JSON.stringify([...command, "--threads", "1", "a.js"])}, {
+          stdout: "pipe", stderr: "pipe"
+        });
+        const [stdout, stderr, exitCode] = await Promise.all([
+          child.stdout.text(), child.stderr.text(), child.exited
+        ]);
+        console.log(JSON.stringify({ stdout, stderr, exitCode, maxRSS: child.resourceUsage().maxRSS }));`,
+      ],
+      env,
+      cwd: String(dir),
+      stderr: "pipe",
+    });
+    const [output, helperExitCode] = await Promise.all([proc.stdout.text(), proc.exited]);
+    expect(helperExitCode).toBe(0);
+    const { stdout, exitCode, maxRSS } = JSON.parse(output);
     // Where the stack is smaller or the frames are larger.
     if (!stdout.includes("The code is nested too deeply")) {
       expect(stdout).toContain(" errors and 0 warnings potentially fixable with the `--fix` option.");
     }
     expect(exitCode).toBe(1);
-    expect(proc.resourceUsage()!.maxRSS).toBeLessThan((isASAN || isDebug ? 700 : 300) * 1024 * 1024);
+    expect(maxRSS).toBeLessThan((isASAN || isDebug ? 700 : 300) * 1024 * 1024);
   });
 
   // What matches a path with a pattern of `include` called itself for each `**`, and tried every number of directories for each
@@ -10289,7 +10308,7 @@ describe.concurrent("a lint script in package.json", () => {
       const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
       expect(stdout).toBe("");
       expect(stderr).toContain("ERR_INVALID_PACKAGE_CONFIG");
-      expect(exitCode).toBe(1);
+      expect(exitCode).toBe(2);
     },
   );
 

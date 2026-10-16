@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { bunEnv, bunExe, tempDir, tls as validCert } from "harness";
 import { spawn } from "node:child_process";
+import { createPrivateKey } from "node:crypto";
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import http from "node:http";
@@ -41,6 +42,66 @@ function tlsRequest(port: number): Promise<string> {
   socket.on("close", () => resolve(received));
   return promise;
 }
+
+// Inherited live-context normalization gaps; see followup-https-context-normalization.md.
+test.failing.each(["TLS 1.3 cipher names", "per-key passphrase", "default cipher order"] as const)(
+  "setSecureContext applies %s like the constructor",
+  async kind => {
+    const fixtures = join(import.meta.dirname, "../test/fixtures/keys");
+    const key = readFileSync(join(fixtures, "agent1-key.pem"));
+    const cert = readFileSync(join(fixtures, "agent1-cert.pem"));
+    const options: tls.SecureContextOptions = { key, cert };
+    if (kind === "TLS 1.3 cipher names") options.ciphers = "TLS_AES_128_GCM_SHA256";
+    if (kind === "per-key passphrase") {
+      options.key = [
+        {
+          pem: createPrivateKey(key).export({
+            format: "pem",
+            type: "pkcs8",
+            cipher: "aes-256-cbc",
+            passphrase: "fixture",
+          }),
+          passphrase: "fixture",
+        },
+      ];
+    }
+    if (kind === "default cipher order") {
+      options.ciphers = "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256";
+      options.minVersion = options.maxVersion = "TLSv1.2";
+    }
+    await using server = https.createServer({ key, cert }, (_req, res) => res.end("ok"));
+    const port = await listen(server);
+    server.setSecureContext(options);
+    const response = await new Promise<{ status: number | undefined; protocol: string | null; cipher: string }>(
+      (resolve, reject) => {
+        const request = https.get(
+          {
+            host: "127.0.0.1",
+            port,
+            rejectUnauthorized: false,
+            agent: false,
+            ...(kind === "default cipher order"
+              ? {
+                  ciphers: "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384",
+                  maxVersion: "TLSv1.2" as const,
+                }
+              : {}),
+          },
+          res => {
+            const socket = res.socket as tls.TLSSocket;
+            const result = { status: res.statusCode, protocol: socket.getProtocol(), cipher: socket.getCipher()!.name };
+            res.resume();
+            res.once("end", () => resolve(result));
+          },
+        );
+        request.once("error", reject);
+      },
+    );
+    expect(response.status).toBe(200);
+    if (kind === "TLS 1.3 cipher names") expect(response.protocol).toBe("TLSv1.3");
+    if (kind === "default cipher order") expect(response.cipher).toBe("ECDHE-RSA-AES256-GCM-SHA384");
+  },
+);
 
 describe.concurrent("https.Server with no usable key and cert", () => {
   test.each<[string, (handler: http.RequestListener) => http.Server]>([
