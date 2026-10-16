@@ -745,7 +745,6 @@ Server.prototype[setSecureContextSymbol] = function (options) {
 
   const {
     processPfxOptions,
-    validateSecureProtocol,
     secureProtocolToVersionRange,
     tlsStringToProtocolVersion,
   } = require("internal/tls");
@@ -757,7 +756,6 @@ Server.prototype[setSecureContextSymbol] = function (options) {
   if (pfxExtraCAs?.length && ca != null) {
     ca = $isArray(ca) ? [...ca, ...pfxExtraCAs] : [ca, ...pfxExtraCAs];
   }
-  validateSecureProtocol(tlsOptions.secureProtocol);
   const range = secureProtocolToVersionRange(tlsOptions.secureProtocol);
   const next = {
     ...tlsOptions,
