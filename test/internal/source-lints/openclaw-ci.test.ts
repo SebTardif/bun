@@ -14,7 +14,10 @@ import {
   windowsSmoke,
 } from "../../../scripts/openclaw-ci/tests.ts";
 
-const tracked = execFileSync("git", ["ls-files", "-z", "test"], { encoding: "utf8" }).split("\0").filter(Boolean);
+// The lint/format fixture corpus puts the tracked path list above node:child_process's 1 MiB default.
+const tracked = execFileSync("git", ["ls-files", "-z", "test"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })
+  .split("\0")
+  .filter(Boolean);
 
 test("owner-exit fails at five assertion failures in 50 trials", () => {
   for (const [failures, expected] of [

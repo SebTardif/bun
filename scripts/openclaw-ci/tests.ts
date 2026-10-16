@@ -170,7 +170,7 @@ export function selectTests(changed: string[], tracked: string[], nightly: boole
 }
 
 function git(...args: string[]): string[] {
-  const result = spawnSync("git", args, { encoding: "utf8" });
+  const result = spawnSync("git", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
   if (result.status !== 0) throw new Error(result.stderr || `git ${args[0]} failed`);
   return result.stdout.split("\0").filter(Boolean);
 }
