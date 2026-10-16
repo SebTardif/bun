@@ -2515,12 +2515,7 @@ Socket.prototype._destroy = function _destroy(err, callback) {
   // Node: after 'error', before 'close'. With no error it goes first, so the stream is errored before the EOF that the native close handler pushes can emit 'end'.
   if (canceledWrite && !err) process.nextTick(cancelWriteNT, canceledWrite);
 
-  // Stream-level TLS owns its transport; an adopted fd pair closes through closeOwedRaw.
-  // https://github.com/nodejs/node/blob/v24.21.0/lib/internal/js_stream_socket.js#L253
   const upgraded = this[kupgraded];
-  if (upgraded && !this[kAdoptedTLSTransport] && !upgraded.destroyed) {
-    upgraded.destroy?.();
-  }
 
   // Close an fd adopted for synchronous writes (node closes the wrapping
   // libuv handle here). Leave stdio fds 0-2 open: process.stdout/stderr and
