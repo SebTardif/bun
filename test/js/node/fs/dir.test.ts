@@ -215,7 +215,7 @@ describe("directory entries with buffer names", () => {
       (dir, options) => {
         using handle = fs.opendirSync(dir, options);
         const entries = [];
-        for (let entry; (entry = handle.readSync()) !== null; ) entries.push(entry);
+        for (let entry; (entry = handle.readSync()) !== null;) entries.push(entry);
         return entries;
       },
     ],
@@ -224,7 +224,7 @@ describe("directory entries with buffer names", () => {
       async (dir, options) => {
         await using handle = await promisify(fs.opendir)(dir, options);
         const entries = [];
-        for (let entry; (entry = await promisify(handle.read.bind(handle))()) !== null; ) entries.push(entry);
+        for (let entry; (entry = await promisify(handle.read.bind(handle))()) !== null;) entries.push(entry);
         return entries;
       },
     ],
@@ -233,7 +233,7 @@ describe("directory entries with buffer names", () => {
       async (dir, options) => {
         await using handle = await fs.promises.opendir(dir, options);
         const entries = [];
-        for (let entry; (entry = await handle.read()) !== null; ) entries.push(entry);
+        for (let entry; (entry = await handle.read()) !== null;) entries.push(entry);
         return entries;
       },
     ],

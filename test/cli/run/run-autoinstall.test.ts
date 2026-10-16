@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync } from "fs";
-import { bunEnv, bunExe, isASAN, isLinux, isWindows, tempDir, tls, tmpdirSync } from "harness";
+import { bunEnv, bunExe, isASAN, isLinux, isWindows, tempDir, tls } from "harness";
 import { mkfifo } from "mkfifo";
 import { connect, type Socket } from "net";
 import { join, parse } from "path";

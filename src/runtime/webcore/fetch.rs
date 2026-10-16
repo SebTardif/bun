@@ -765,7 +765,7 @@ fn fetch_impl<const ALLOW_GET_BODY: bool>(
     // its own (interned, so all such requests share one cached context).
     if ssl_config.is_none() && vm.tls_use_system_ca_differs_from_process() {
         ssl_config = Some(http::ssl_config::global_registry::intern(
-            crate::socket::tls_true_defaults(vm),
+            crate::socket::tls_true_defaults(vm, false),
         ));
     }
 

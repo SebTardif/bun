@@ -755,7 +755,7 @@ Full documentation is available at <magenta>https://bun.com/docs/cli/run<r>
             path,
             loader: Some(Self::loader_of_main(ctx, path, loader)),
             // `[eval]`, `[stdin]`
-            text: Some(&ctx.runtime_options.eval.script[..]).filter(|it| !it.is_empty()),
+            text: ctx.runtime_options.eval.script.as_deref(),
         };
         // src/js/internal/html.ts serves every argument that is a page.
         let is_page = |path: &&[u8]| path.ends_with(b".html");
@@ -1975,7 +1975,7 @@ impl RunCommand {
             // shim dir was chosen; point them at the dir actually in use.
             #[cfg(not(windows))]
             let bun_node_exe = Self::bun_node_file_utf8()?;
-            let env_mut = this_transpiler.env_mut();
+            let env_mut = env_loader;
             env_mut
                 .map
                 .put(b"NODE", bun_node_exe.as_bytes())
