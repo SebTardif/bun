@@ -3670,3 +3670,73 @@ test.concurrent("vm compilation admission counts distinct sources before retaini
   const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
   expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
 });
+
+describe("compilation-cache source security metadata", () => {
+  async function runMetadataFixture(enforce: boolean) {
+    using dir = tempDir("vm-cache-source-metadata", {
+      "fixture.mjs": `
+        import assert from "node:assert/strict";
+        import { runNodeVMSource as run, nodeVMSourceMetadata, nodeVMCompilationCacheStats as stats } from "bun:internal-for-testing";
+        globalThis.sourceMetadata = nodeVMSourceMetadata;
+        const enforce = ${enforce};
+        const text = "[sourceMetadata(), (function nested() { return sourceMetadata(); })()]";
+        const before = stats();
+        const seen = new Set();
+        // Equal text with every taint/provenance pair must behave as a fresh compile,
+        // including when an earlier entry has the opposite provenance.
+        for (const mode of [0, 1, 1, 2]) {
+          for (const staticSource of [true, false, true]) {
+            for (let tracking = 0; tracking < 4; tracking++) {
+              for (let prevalent = 0; prevalent < 4; prevalent++) {
+                const key = JSON.stringify([tracking, prevalent, staticSource]);
+                const hits = stats().hits;
+                if (enforce && !staticSource) {
+                  assert.throws(() => run(text, tracking, prevalent, staticSource, mode), EvalError);
+                } else {
+                  const expected = [tracking, prevalent, staticSource];
+                  assert.deepEqual(run(text, tracking, prevalent, staticSource, mode), [expected, expected]);
+                }
+                if (mode) {
+                  assert.equal(stats().hits - hits, seen.has(key) ? 1 : 0);
+                  seen.add(key);
+                }
+              }
+            }
+          }
+        }
+        assert.ok(stats().hits > before.hits);
+        assert.ok(stats().decodes > before.decodes);
+        for (const mode of [0, 1, 1, 2]) {
+          for (const text of ['eval("40 + 2")', 'Function("return 42")()']) {
+            if (enforce) {
+              // Static containing code does not make its dynamically generated code static.
+              assert.throws(() => run(text, 0, 0, true, mode), EvalError);
+            } else {
+              assert.equal(run(text, 0, 0, true, mode), 42);
+            }
+          }
+        }
+        console.log("ok");
+      `,
+    });
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), "--expose-internals", join(String(dir), "fixture.mjs")],
+      env: {
+        ...bunEnv,
+        BUN_VM_COMPILE_CACHE_SIZE: "268435456",
+        BUN_VM_COMPILE_CACHE_THRESHOLD: "0",
+        BUN_JSC_useCodeCache: "false",
+        BUN_JSC_disallowNonStaticCode: enforce ? "true" : "false",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+  }
+
+  test.each([false, true])(
+    "cache hits and decoded payloads preserve both taint kinds and provenance (enforce=%s)",
+    runMetadataFixture,
+  );
+});

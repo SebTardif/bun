@@ -4739,3 +4739,45 @@ describe("Worker exit listener cleanup", () => {
     });
   });
 });
+
+test("worker error forwarding preserves lazy, captured, throwing and cross-realm stacks", async () => {
+  await using proc = Bun.spawn({
+    cmd: [bunExe(), join(import.meta.dir, "worker-error-stack-fixture.mjs")],
+    env: bunEnv,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  const result = JSON.parse(stdout);
+  for (const key of ["constructed", "captured", "vm"]) {
+    expect(result[key]).toEqual({
+      before: 0,
+      first: `formatted:${key === "vm" ? "vm-local" : "local"}`,
+      second: `formatted:${key === "vm" ? "vm-local" : "local"}`,
+      calls: 1,
+    });
+  }
+  for (const mode of [
+    "ordinary",
+    "captured",
+    "materialized",
+    "throwing-formatter",
+    "throwing-getter",
+    "captured-throwing-getter",
+    "vm",
+    "vm-throwing-formatter",
+  ]) {
+    const { events, forwarded, exit } = result["worker:" + mode];
+    expect(forwarded).toEqual({
+      name: "Error",
+      message: "original",
+      stack: mode.includes("throwing") ? null : "formatted:original",
+      code: "E_ORIGINAL",
+    });
+    expect(events.filter((event: { formatter?: number }) => event.formatter).length).toBeLessThanOrEqual(1);
+    expect(events.filter((event: { getter?: boolean }) => event.getter).length).toBeLessThanOrEqual(1);
+    expect(exit).toBe(1);
+  }
+  expect(stderr).toBe("");
+  expect(exitCode).toBe(0);
+});

@@ -55,6 +55,7 @@ public:
     RefPtr<JSC::CachedBytecode> bytecode(const JSC::SourceCode&, const Identity&);
     const Statistics& statistics();
     static JSC::JSValue testPolicy(JSC::JSGlobalObject*);
+    static JSC::JSValue testSource(JSC::JSGlobalObject*, JSC::CallFrame*);
 
 private:
     enum class Promotion : uint8_t { None,
@@ -64,6 +65,8 @@ private:
         WTF_DEPRECATED_MAKE_STRUCT_FAST_ALLOCATED(Entry);
         unsigned hash;
         Identity identity;
+        JSC::SourceTaintedness taintedness;
+        JSC::SourceProvenance provenance;
         WTF::String source;
         WTF::String filename;
         JSC::Weak<JSC::JSCell> importer;

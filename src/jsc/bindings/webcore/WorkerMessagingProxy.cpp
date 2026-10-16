@@ -781,9 +781,14 @@ bool WorkerMessagingProxy::postSerializedErrorToWorkerObject(Zig::GlobalObject& 
     // whole error, so retry once with an own undefined `stack` that cannot run the getter again.
     if (!serialized && !vm.hasPendingTerminationException()) {
         if (auto* errorInstance = dynamicDowncast<JSC::ErrorInstance>(value)) {
+            // Drain any saved captured stack before installing the fallback, and prevent the
+            // constructor's lazy stack from replacing it or invoking the formatter again.
+            errorInstance->setStackPropertyProvidedByCapturedStackTrace();
+            errorInstance->materializeErrorInfoIfNeeded(vm);
+            CLEAR_IF_EXCEPTION(scope);
             errorInstance->putDirect(vm, vm.propertyNames->stack, JSC::jsUndefined(), static_cast<unsigned>(JSC::PropertyAttribute::DontEnum));
-            errorInstance->setStackPropertyAlreadyMaterialized();
-            serialized = SerializedScriptValue::create(workerGlobalObject, value, SerializationForStorage::No, SerializationErrorMode::NonThrowing);
+            if (!vm.hasPendingTerminationException())
+                serialized = SerializedScriptValue::create(workerGlobalObject, value, SerializationForStorage::No, SerializationErrorMode::NonThrowing);
             CLEAR_IF_EXCEPTION(scope);
         }
     }

@@ -930,3 +930,16 @@ export const nodeVMCompilationCachePolicyTest: () => {
   entries: number;
   empty: boolean;
 } = $cpp("NodeVMCompilationCache.cpp", "createNodeVMCompilationCachePolicyTest");
+
+export const runNodeVMSource: (
+  source: string,
+  trackingTaint: number,
+  prevalentTaint: number,
+  staticSource: boolean,
+  mode: number,
+) => unknown = $newCppFunction("NodeVMCompilationCache.cpp", "jsRunNodeVMSourceForTesting", 5);
+export const nodeVMSourceMetadata: () => [number, number, boolean] = $newCppFunction(
+  "NodeVMCompilationCache.cpp",
+  "jsNodeVMSourceMetadataForTesting",
+  0,
+);
