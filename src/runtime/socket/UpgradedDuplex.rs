@@ -292,7 +292,8 @@ impl UpgradedDuplex {
         if teardown {
             // A readable EOF still permits close_notify while the transport is writable.
             // Node ends no destroyed stream.
-            for property in ["writableEnded", "destroyed"] {
+            // A pending end still needs its write error to finish, as with Node JSStreamSocket.
+            for property in ["writableFinished", "destroyed"] {
                 match duplex.get(&global, property) {
                     Ok(Some(done)) if done.to_boolean() => return,
                     Ok(_) => {}

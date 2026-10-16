@@ -553,7 +553,6 @@ function adoptTLSPair(self, connection, pair) {
   if (!pair) throw new Error("Invalid socket");
   const raw = (connection._handle = pair[0]);
   raw[kAdoptedTLSRaw] = self;
-  self.once("end", self[kCloseRawConnection]);
   raw.connecting = false;
   self._handle = pair[1];
 }
