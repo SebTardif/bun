@@ -290,22 +290,7 @@ impl UpgradedDuplex {
         // A peer's close_notify still leaves our writable half open.
         let teardown = data.is_none() || self.is_shutdown();
         if teardown {
-            // A teardown payload (close_notify) after the transport's readable
-            // side ended has no reader behind it: node writes nothing there,
-            // and a transport that forwards into an auto-ended net.Socket
-            // throws writeAfterFIN (EPIPE). The trailing end() is not a write
-            // and still goes through the writableEnded probe below, so a
-            // half-open transport sees our FIN.
-            if data.is_some() {
-                match Self::transport_got_eof(duplex, &global) {
-                    Ok(false) => {}
-                    Ok(true) => return,
-                    Err(err) => {
-                        (self.handlers.on_error)(self.handlers.ctx, global.take_error(err));
-                        return;
-                    }
-                }
-            }
+            // A readable EOF still permits close_notify while the transport is writable.
             // Node ends no destroyed stream.
             for property in ["writableEnded", "destroyed"] {
                 match duplex.get(&global, property) {
@@ -345,15 +330,6 @@ impl UpgradedDuplex {
                 (self.handlers.on_error)(self.handlers.ctx, global.take_error(err));
             }
         }
-    }
-
-    /// Not the 'end' event, which a paused transport holds back. No public property tells.
-    fn transport_got_eof(duplex: JSValue, global: &JSGlobalObject) -> JsResult<bool> {
-        let ended = match duplex.get(global, "_readableState")? {
-            Some(state) if state.is_object() => state.get(global, "ended")?,
-            _ => None,
-        };
-        Ok(ended.is_some_and(|ended| ended.to_boolean()))
     }
 
     fn internal_write(this: *mut Self, encoded_data: &[u8]) {
