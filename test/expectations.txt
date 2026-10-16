@@ -35,3 +35,8 @@
 # only hold on the distributing model. Passes on macOS and Windows.
 # (Verified still failing on every Linux lane, build 87834.)
 [ LINUX ] test/js/node/test/sequential/test-net-listen-shared-ports.js [ FAIL ] # SO_REUSEPORT shared-listener semantics on Linux
+
+# Fork main and the upstream-sync candidate both SIGSEGV while fuzzing process.stdin's methods;
+# the synced upstream runtime passes. Keep this crashing file out of ordinary Linux runs until
+# the inherited crash is isolated. The full sync qualification runs it explicitly.
+[ LINUX ] test/js/bun/util/fuzzy-wuzzy.test.ts [ CRASH ]

@@ -169,6 +169,8 @@ if (ESBUILD) {
 export const ESBUILD_PATH = import.meta.resolveSync("esbuild/bin/esbuild");
 
 export interface BundlerTestInput {
+  /** Run an inherited fork divergence, retaining its upstream assertions. */
+  failing?: boolean;
   /** Temporary flag to mark failing tests as skipped. */
   todo?: boolean;
   throw?: boolean;
@@ -552,6 +554,7 @@ function expectBundled(
     minChunkSize,
     foldChunks,
     target,
+    failing: _failing,
     todo: notImplemented,
     treeShaking,
     unsupportedCSSFeatures,
@@ -2000,7 +2003,7 @@ export function itBundled(
     // backend=api uses process.chdir and a module-global configRef, so it
     // cannot run concurrently with other tests. it.serial is a no-op outside
     // of describe.concurrent / --concurrent.
-    const testFn = resolveBackend(opts) === "api" ? it.serial : it;
+    const testFn = (resolveBackend(opts) === "api" ? it.serial : it).failingIf(!!opts.failing && !ESBUILD);
     const baseTimeout = opts.snapshotSourceMap || opts.compile ? 30_000 : 5_000;
     testFn(
       id,

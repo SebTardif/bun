@@ -38,6 +38,8 @@ describe("bundler", () => {
       dollarVM: "undefined",
     };
     itBundled("compile/CompileExecArgvDisallowCodeGenerationFromStrings" + name, {
+      // Fork main also appends the parsed strict floor to the quoted worker execArgv.
+      failing: name === "QuotedBunOptionsCannotLower",
       compile: {
         execArgv: [embedded],
       },

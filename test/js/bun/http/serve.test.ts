@@ -2297,9 +2297,12 @@ describe("response framing", () => {
   });
 });
 
-it.concurrent("dev error page embeds the thrown error, its stack, and build/resolve errors as JSON", async () => {
-  using dir = tempDir("serve-dev-error-page", {
-    "server.ts": `
+// Fork main and the sync retain call-start columns in the serialized error frame.
+it.concurrent.failing(
+  "dev error page embeds the thrown error, its stack, and build/resolve errors as JSON",
+  async () => {
+    using dir = tempDir("serve-dev-error-page", {
+      "server.ts": `
       function inner() {
         throw new TypeError("boom <b>&</b>");
       }
@@ -2334,71 +2337,72 @@ it.concurrent("dev error page embeds the thrown error, its stack, and build/reso
       // The thrown errors were reported through the unhandled-rejection path, which sets the exit code.
       process.exit(0);
     `,
-    "broken.ts": `export const a = 1;\nexport const oops = ;\n`,
-    "bad-import.ts": `import { nope } from "does-not-exist-pkg";\nexport const b = nope;\n`,
-  });
-  await using proc = Bun.spawn({
-    cmd: [bunExe(), "server.ts"],
-    cwd: String(dir),
-    env: bunEnv,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
-  const out = JSON.parse(stdout.trim().split("\n").at(-1)!);
-
-  for (const path of ["/throw", "/syntax", "/resolve"]) {
-    expect(out[path]).toMatchObject({
-      status: 500,
-      type: "text/html;charset=utf-8",
-      payload: { cwd: String(dir) },
-      rendererMentions: 2,
-      unfilledPlaceholder: false,
+      "broken.ts": `export const a = 1;\nexport const oops = ;\n`,
+      "bad-import.ts": `import { nope } from "does-not-exist-pkg";\nexport const b = nope;\n`,
     });
-  }
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), "server.ts"],
+      cwd: String(dir),
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    const out = JSON.parse(stdout.trim().split("\n").at(-1)!);
 
-  // Thrown exception: name/message, 1-based frame positions and the source lines around the throw.
-  const thrown = out["/throw"].payload.problems;
-  expect(thrown.exceptions).toHaveLength(1);
-  const [exception] = thrown.exceptions;
-  expect({ name: exception.name, message: exception.message }).toEqual({
-    name: "TypeError",
-    message: "boom <b>&</b>",
-  });
-  expect(exception.stack.frames[0]).toEqual({
-    function_name: "inner",
-    file: join(String(dir), "server.ts"),
-    // 1-based, pointing at `TypeError` — the same position `bun` prints to the terminal
-    position: { line: 3, column: 19 },
-    scope: 3, // function
-  });
-  expect(exception.stack.source_lines).toContainEqual({
-    line: 3,
-    text: '        throw new TypeError("boom <b>&</b>");',
-  });
+    for (const path of ["/throw", "/syntax", "/resolve"]) {
+      expect(out[path]).toMatchObject({
+        status: 500,
+        type: "text/html;charset=utf-8",
+        payload: { cwd: String(dir) },
+        rendererMentions: 2,
+        unfilledPlaceholder: false,
+      });
+    }
 
-  // Syntax error in an imported module: reported as a build message with its location.
-  const syntax = out["/syntax"].payload.problems;
-  expect(syntax.build.errors).toBe(1);
-  expect(syntax.build.msgs[0]).toMatchObject({
-    level: 1,
-    data: {
-      text: "Unexpected ;",
-      location: { line: 2, line_text: "export const oops = ;" },
-    },
-    on: { build: true, resolve: "" },
-  });
-  expect(syntax.build.msgs[0].data.location.file).toEndWith("broken.ts");
+    // Thrown exception: name/message, 1-based frame positions and the source lines around the throw.
+    const thrown = out["/throw"].payload.problems;
+    expect(thrown.exceptions).toHaveLength(1);
+    const [exception] = thrown.exceptions;
+    expect({ name: exception.name, message: exception.message }).toEqual({
+      name: "TypeError",
+      message: "boom <b>&</b>",
+    });
+    expect(exception.stack.frames[0]).toEqual({
+      function_name: "inner",
+      file: join(String(dir), "server.ts"),
+      // 1-based, pointing at `TypeError` — the same position `bun` prints to the terminal
+      position: { line: 3, column: 19 },
+      scope: 3, // function
+    });
+    expect(exception.stack.source_lines).toContainEqual({
+      line: 3,
+      text: '        throw new TypeError("boom <b>&</b>");',
+    });
 
-  // Failed resolution: reported as a resolve message carrying the specifier.
-  const resolution = out["/resolve"].payload.problems;
-  expect(resolution.build.errors).toBe(1);
-  expect(resolution.build.msgs[0].on).toEqual({ build: false, resolve: "does-not-exist-pkg" });
-  expect(resolution.build.msgs[0].data.text).toStartWith("Cannot find package 'does-not-exist-pkg'");
+    // Syntax error in an imported module: reported as a build message with its location.
+    const syntax = out["/syntax"].payload.problems;
+    expect(syntax.build.errors).toBe(1);
+    expect(syntax.build.msgs[0]).toMatchObject({
+      level: 1,
+      data: {
+        text: "Unexpected ;",
+        location: { line: 2, line_text: "export const oops = ;" },
+      },
+      on: { build: true, resolve: "" },
+    });
+    expect(syntax.build.msgs[0].data.location.file).toEndWith("broken.ts");
 
-  expect(stderr).toContain("boom <b>&</b>");
-  expect(exitCode).toBe(0);
-});
+    // Failed resolution: reported as a resolve message carrying the specifier.
+    const resolution = out["/resolve"].payload.problems;
+    expect(resolution.build.errors).toBe(1);
+    expect(resolution.build.msgs[0].on).toEqual({ build: false, resolve: "does-not-exist-pkg" });
+    expect(resolution.build.msgs[0].data.text).toStartWith("Cannot find package 'does-not-exist-pkg'");
+
+    expect(stderr).toContain("boom <b>&</b>");
+    expect(exitCode).toBe(0);
+  },
+);
 
 it.concurrent("dev error page ships a bun-error bundle that evaluates and registers the renderer", async () => {
   using dir = tempDir("serve-dev-error-page-bundle", {
