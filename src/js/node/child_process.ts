@@ -1681,9 +1681,7 @@ class ChildProcess extends EventEmitter {
         throw $ERR_INVALID_ARG_TYPE("message", ["string", "object", "number", "boolean"], message);
       }
       const pending = this.#failedIpcPending;
-      const error = pending
-        ? new ErrnoException(process.binding("uv").UV_EPIPE, "write")
-        : $ERR_IPC_CHANNEL_CLOSED();
+      const error = pending ? new ErrnoException(process.binding("uv").UV_EPIPE, "write") : $ERR_IPC_CHANNEL_CLOSED();
       if (callback) process.nextTick(callback, error);
       else process.nextTick(() => this.emit("error", error));
       return pending;
