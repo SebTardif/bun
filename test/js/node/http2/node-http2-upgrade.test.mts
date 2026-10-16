@@ -333,54 +333,57 @@ describe("HTTP/2 upgrade — ALPN negotiation", () => {
 const inheritedQueueTest = process.versions.bun ? (await import("bun:test")).test.failing : test;
 
 describe("HTTP/2 upgrade — the client closes its side first", () => {
-  inheritedQueueTest("what the server still has to send arrives, over a raw socket that got the client's FIN", async () => {
-    const h2Server = http2.createSecureServer(TLS);
-    const log: string[] = [];
-    const first = Buffer.alloc(16 * 1024 * 1024, "a");
-    const writing = Promise.withResolvers<void>();
-    h2Server.on("error", (err: NodeJS.ErrnoException) => log.push(`server 'error': ${err.code}`));
-    h2Server.on("unknownProtocol", socket => {
-      socket.on("error", (err: NodeJS.ErrnoException) => log.push(`'error': ${err.code}`));
-      socket.resume();
-      // More than the kernel takes at once, so the writes behind it are still queued when the FIN arrives.
-      socket.write(first, err => log.push(`write callback: ${(err as NodeJS.ErrnoException)?.code}`));
-      socket.write("tail", err => log.push(`queued write callback: ${(err as NodeJS.ErrnoException)?.code}`));
-      socket.write("third", err => log.push(`last write callback: ${(err as NodeJS.ErrnoException)?.code}`));
-      writing.resolve();
-    });
-    let raw: net.Socket | undefined;
-    const netServer = net.createServer(socket => void h2Server.emit("connection", (raw = socket)));
-    await once(netServer.listen(0, "127.0.0.1"), "listening");
-    const port = (netServer.address() as net.AddressInfo).port;
-    const options = { host: "127.0.0.1", port, rejectUnauthorized: false, allowHalfOpen: true };
-    const client = tls.connect(options as tls.ConnectionOptions);
-    try {
-      client.on("error", err => log.push(`client 'error': ${(err as NodeJS.ErrnoException).code}`));
-      await once(client, "secureConnect");
-      await writing.promise;
-      // A turn later only what the kernel did not take is left.
-      await new Promise(resolve => setImmediate(resolve));
-      if (process.versions.bun !== undefined) assert.notStrictEqual(raw?.writableLength, 0);
-      let received = 0;
-      const ended = once(client, "end");
-      client.end();
-      // Its FIN is out before it reads the first byte.
-      await once(client, "finish");
-      client.on("data", chunk => (received += chunk.length));
-      await ended;
-      assert.deepStrictEqual(
-        { received, log },
-        {
-          received: first.length + "tail".length + "third".length,
-          log: ["write callback: undefined", "queued write callback: undefined", "last write callback: undefined"],
-        },
-      );
-    } finally {
-      client.destroy();
-      raw?.destroy();
-      netServer.close();
-    }
-  });
+  inheritedQueueTest(
+    "what the server still has to send arrives, over a raw socket that got the client's FIN",
+    async () => {
+      const h2Server = http2.createSecureServer(TLS);
+      const log: string[] = [];
+      const first = Buffer.alloc(16 * 1024 * 1024, "a");
+      const writing = Promise.withResolvers<void>();
+      h2Server.on("error", (err: NodeJS.ErrnoException) => log.push(`server 'error': ${err.code}`));
+      h2Server.on("unknownProtocol", socket => {
+        socket.on("error", (err: NodeJS.ErrnoException) => log.push(`'error': ${err.code}`));
+        socket.resume();
+        // More than the kernel takes at once, so the writes behind it are still queued when the FIN arrives.
+        socket.write(first, err => log.push(`write callback: ${(err as NodeJS.ErrnoException)?.code}`));
+        socket.write("tail", err => log.push(`queued write callback: ${(err as NodeJS.ErrnoException)?.code}`));
+        socket.write("third", err => log.push(`last write callback: ${(err as NodeJS.ErrnoException)?.code}`));
+        writing.resolve();
+      });
+      let raw: net.Socket | undefined;
+      const netServer = net.createServer(socket => void h2Server.emit("connection", (raw = socket)));
+      await once(netServer.listen(0, "127.0.0.1"), "listening");
+      const port = (netServer.address() as net.AddressInfo).port;
+      const options = { host: "127.0.0.1", port, rejectUnauthorized: false, allowHalfOpen: true };
+      const client = tls.connect(options as tls.ConnectionOptions);
+      try {
+        client.on("error", err => log.push(`client 'error': ${(err as NodeJS.ErrnoException).code}`));
+        await once(client, "secureConnect");
+        await writing.promise;
+        // A turn later only what the kernel did not take is left.
+        await new Promise(resolve => setImmediate(resolve));
+        if (process.versions.bun !== undefined) assert.notStrictEqual(raw?.writableLength, 0);
+        let received = 0;
+        const ended = once(client, "end");
+        client.end();
+        // Its FIN is out before it reads the first byte.
+        await once(client, "finish");
+        client.on("data", chunk => (received += chunk.length));
+        await ended;
+        assert.deepStrictEqual(
+          { received, log },
+          {
+            received: first.length + "tail".length + "third".length,
+            log: ["write callback: undefined", "queued write callback: undefined", "last write callback: undefined"],
+          },
+        );
+      } finally {
+        client.destroy();
+        raw?.destroy();
+        netServer.close();
+      }
+    },
+  );
 });
 
 describe("HTTP/2 upgrade — varied status codes", () => {

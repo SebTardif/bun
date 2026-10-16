@@ -1792,48 +1792,51 @@ test("2 TLS sessions deep: the timeout of the session below still fires after th
 });
 
 for (const side of ["client", "server"]) {
-  inheritedResetTest(`2 TLS sessions deep: a ${side} hears of a reset that cuts what it wrote, after its TLS socket closed too`, async () => {
-    const accepted = Promise.withResolvers<net.Socket>();
-    const listener = net.createServer(accepted.resolve) as Listening<net.Server>;
-    await new Promise<void>(listening => listener.listen(0, "127.0.0.1", listening));
-    const tcpClient = net.connect(listener.address().port, "127.0.0.1");
-    const tcpServer = await accepted.promise;
-    const outerServer = new tls.TLSSocket(tcpServer, { isServer: true, key, cert });
-    const outerClient = tls.connect({ socket: tcpClient, rejectUnauthorized: false });
-    const innerServer = new tls.TLSSocket(outerServer, { isServer: true, key, cert });
-    const innerClient = tls.connect({ socket: outerClient, rejectUnauthorized: false });
-    const all = [tcpClient, tcpServer, outerClient, outerServer, innerClient, innerServer];
-    const [inner, outer, peerTcp, peers] =
-      side === "client"
-        ? [innerClient, outerClient, tcpServer, [innerServer, outerServer, tcpServer]]
-        : [innerServer, outerServer, tcpClient, [innerClient, outerClient, tcpClient]];
-    try {
-      const told: string[] = [];
-      for (const socket of all) socket.on("error", () => {});
-      await Promise.all([
-        new Promise(secured => innerClient.once("secureConnect", secured)),
-        new Promise(secured => innerServer.once("secure", secured)),
-      ]);
-      // The peer reads nothing, so most of this never leaves.
-      for (const socket of peers) socket.pause();
-      inner.on("error", (err: NodeJS.ErrnoException) => told.push(`TLS socket 'error': ${err.code}`));
-      outer.on("error", (err: NodeJS.ErrnoException) => told.push(`session below 'error': ${err.code}`));
-      inner.write(
-        Buffer.alloc(8 * 1024 * 1024, "a"),
-        (err?: NodeJS.ErrnoException | null) => err && told.push(`write callback: ${err.code}`),
-      );
-      const innerClosed = new Promise(resolve => inner.once("close", resolve));
-      const outerClosed = new Promise(resolve => outer.once("close", resolve));
-      inner.destroy();
-      await innerClosed;
-      peerTcp.resetAndDestroy();
-      await outerClosed;
-      assert.notDeepStrictEqual(told, []);
-    } finally {
-      for (const socket of all) socket.destroy();
-      listener.close();
-    }
-  });
+  inheritedResetTest(
+    `2 TLS sessions deep: a ${side} hears of a reset that cuts what it wrote, after its TLS socket closed too`,
+    async () => {
+      const accepted = Promise.withResolvers<net.Socket>();
+      const listener = net.createServer(accepted.resolve) as Listening<net.Server>;
+      await new Promise<void>(listening => listener.listen(0, "127.0.0.1", listening));
+      const tcpClient = net.connect(listener.address().port, "127.0.0.1");
+      const tcpServer = await accepted.promise;
+      const outerServer = new tls.TLSSocket(tcpServer, { isServer: true, key, cert });
+      const outerClient = tls.connect({ socket: tcpClient, rejectUnauthorized: false });
+      const innerServer = new tls.TLSSocket(outerServer, { isServer: true, key, cert });
+      const innerClient = tls.connect({ socket: outerClient, rejectUnauthorized: false });
+      const all = [tcpClient, tcpServer, outerClient, outerServer, innerClient, innerServer];
+      const [inner, outer, peerTcp, peers] =
+        side === "client"
+          ? [innerClient, outerClient, tcpServer, [innerServer, outerServer, tcpServer]]
+          : [innerServer, outerServer, tcpClient, [innerClient, outerClient, tcpClient]];
+      try {
+        const told: string[] = [];
+        for (const socket of all) socket.on("error", () => {});
+        await Promise.all([
+          new Promise(secured => innerClient.once("secureConnect", secured)),
+          new Promise(secured => innerServer.once("secure", secured)),
+        ]);
+        // The peer reads nothing, so most of this never leaves.
+        for (const socket of peers) socket.pause();
+        inner.on("error", (err: NodeJS.ErrnoException) => told.push(`TLS socket 'error': ${err.code}`));
+        outer.on("error", (err: NodeJS.ErrnoException) => told.push(`session below 'error': ${err.code}`));
+        inner.write(
+          Buffer.alloc(8 * 1024 * 1024, "a"),
+          (err?: NodeJS.ErrnoException | null) => err && told.push(`write callback: ${err.code}`),
+        );
+        const innerClosed = new Promise(resolve => inner.once("close", resolve));
+        const outerClosed = new Promise(resolve => outer.once("close", resolve));
+        inner.destroy();
+        await innerClosed;
+        peerTcp.resetAndDestroy();
+        await outerClosed;
+        assert.notDeepStrictEqual(told, []);
+      } finally {
+        for (const socket of all) socket.destroy();
+        listener.close();
+      }
+    },
+  );
 }
 
 // No session the application could have written over: the connection goes at once, whatever its peer does.

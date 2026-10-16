@@ -10274,9 +10274,9 @@ describe.concurrent("a lint script in package.json", () => {
     },
   );
 
-  // git keeps a link to `/dev/zero` as it is. `bun run` stops at such a file, and finds no script in it.
+  // The fork and Node reject a device's empty package config before loading the lint configuration.
   test.skipIf(isWindows)(
-    "a package.json that is a link to a device has no script, and the one above is not asked",
+    "a package.json that is a link to a device is rejected without using the script above",
     async () => {
       using dir = tempDir("bun-lint-name", {
         ...files,
@@ -10286,8 +10286,9 @@ describe.concurrent("a lint script in package.json", () => {
       symlinkSync("/dev/null", join(String(dir), "sub/package.json"));
       const cmd = [bunExe(), "lint", "-f", "unix"];
       await using proc = spawn({ cmd, env, cwd: join(String(dir), "sub"), stdout: "pipe", stderr: "pipe" });
-      const [stdout, exitCode] = await Promise.all([proc.stdout.text(), proc.exited]);
-      expect(stdout).toContain("b.js:1:1: ");
+      const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("ERR_INVALID_PACKAGE_CONFIG");
       expect(exitCode).toBe(1);
     },
   );

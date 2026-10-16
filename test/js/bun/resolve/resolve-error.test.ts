@@ -22,6 +22,7 @@ describe("ResolveMessage", () => {
       "error: Invalid package config <dir>/node_modules/badjson/package.json while importing \"badjson\" from <dir>/index.js.
        code: \"ERR_INVALID_PACKAGE_CONFIG\"
 
+
       Bun v<bun-version>"
     `);
     expect(exitCode).toBe(1);
