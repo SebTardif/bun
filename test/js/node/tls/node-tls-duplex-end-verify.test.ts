@@ -30,6 +30,36 @@ const clientCA = clientCert;
 // the connection ended.
 const isBun = process.versions.bun !== undefined;
 
+test("over a Duplex: responds after peer TLS shutdown and transport FIN", async () => {
+  const [left, right] = duplexPair({ allowHalfOpen: true });
+  const server = new tls.TLSSocket(right, { isServer: true, key, cert });
+  const client = tls.connect({ socket: left, rejectUnauthorized: false });
+  const rawEnd = new Promise<void>(resolve => right.once("end", resolve));
+  const completed = Promise.withResolvers<void>();
+  let response = "";
+  client.on("data", chunk => (response += chunk.toString()));
+  client.once("end", completed.resolve);
+  client.once("error", completed.reject);
+  server.once("error", completed.reject);
+  client.once("finish", () => left.end());
+  client.once("secureConnect", () => client.end());
+  server.resume();
+  server.once("end", () => {
+    void rawEnd.then(() => {
+      setImmediate(() => server.write("response-after-peer-fin", () => server.end()));
+    });
+  });
+  try {
+    await completed.promise;
+    assert.strictEqual(response, "response-after-peer-fin");
+  } finally {
+    client.destroy();
+    server.destroy();
+    left.destroy();
+    right.destroy();
+  }
+});
+
 // Resolves when this process has read what its sockets had received by the time of the call: a new connection that
 // the peer answers takes more turns of the event loop than a read that is already due.
 async function pendingReadsDone() {

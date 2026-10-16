@@ -287,7 +287,8 @@ impl UpgradedDuplex {
         // duplex whose write side already ended (TLS-inception teardown) only
         // surface a spurious EPIPE - drop them. Ordinary data writes skip the
         // probe so write-after-end still errors like node.
-        let teardown = data.is_none() || self.wrapper_ref().is_some_and(|w| w.is_shutdown());
+        // A peer's close_notify still leaves our writable half open.
+        let teardown = data.is_none() || self.is_shutdown();
         if teardown {
             // A teardown payload (close_notify) after the transport's readable
             // side ended has no reader behind it: node writes nothing there,
