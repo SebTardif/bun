@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Avoid quadratic Worker file-descriptor tracking when many descriptors are open, while preserving automatic cleanup at Worker exit.
+
 - Skip issue finder, issue deduplication, and VS Code publishing workflows that require upstream-only credentials in the fork.
 
 - Select the fork-owned delta plus nightly coverage for upstream-sync PRs, excluding unchanged upstream tests while retaining conflict resolutions and WebKit pin coverage.
