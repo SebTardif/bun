@@ -2,6 +2,7 @@
 #include "GCDefferalContext.h"
 #include "BunClientData.h"
 #include "NodeVM.h"
+#include "CodeGenerationFromStrings.h"
 #include "NodeVMScriptFetcher.h"
 #include <JavaScriptCore/CodeCache.h>
 #include <JavaScriptCore/BytecodeCacheError.h>
@@ -12,6 +13,8 @@
 #include <JavaScriptCore/UnlinkedProgramCodeBlock.h>
 #include <JavaScriptCore/UnlinkedFunctionExecutable.h>
 #include <JavaScriptCore/WeakInlines.h>
+#include <JavaScriptCore/Completion.h>
+#include <JavaScriptCore/StackVisitor.h>
 #include <wtf/Hasher.h>
 #include <wtf/CPUTime.h>
 #include <algorithm>
@@ -41,7 +44,10 @@ static unsigned cacheHash(const SourceCode& source, const NodeVMCompilationCache
     JSValue importer = importerFor(source);
     uintptr_t importerIdentity = importer.isCell() ? reinterpret_cast<uintptr_t>(importer.asCell()) : 0;
     unsigned hash = WTF::computeHash(importerIdentity, source.hash(), source.provider()->sourceURL(), identity.lineOffset, identity.columnOffset,
-        static_cast<unsigned>(identity.kind), identity.filenameProvided, identity.produceCachedData, identity.codeGenerationMode.toRaw(), identity.lexicalFeatures);
+        static_cast<unsigned>(identity.kind), identity.filenameProvided, identity.produceCachedData, identity.codeGenerationMode.toRaw(), identity.lexicalFeatures,
+        static_cast<unsigned>(source.provider()->provenance()));
+    for (auto kind : allSourceTaintKinds)
+        hash = WTF::computeHash(hash, static_cast<unsigned>(source.provider()->sourceTaintedOrigin(kind)));
     return 1 + (hash & 0x7ffffffe); // Reserve the HashMap's empty/deleted integer sentinels.
 }
 
@@ -120,6 +126,7 @@ NodeVMCompilationCache::Entry* NodeVMCompilationCache::find(const SourceCode& so
     auto& entry = *it->value;
     JSValue importer = importerFor(source);
     if (!(entry.identity == identity) || entry.filename != source.provider()->sourceURL() || !sourceMatches(entry.source, source.view())
+        || entry.taintedness != source.provider()->taintedness() || entry.provenance != source.provider()->provenance()
         || entry.hasImporter != importer.isCell() || (entry.hasImporter && entry.importer.get() != importer.asCell()))
         return nullptr;
     touch(entry);
@@ -276,6 +283,8 @@ void NodeVMCompilationCache::insert(JSGlobalObject* globalObject, const SourceCo
     auto entry = makeUnique<Entry>();
     entry->hash = hash;
     entry->identity = identity;
+    entry->taintedness = source.provider()->taintedness();
+    entry->provenance = source.provider()->provenance();
     entry->fullBytecode = fullBytecode;
     entry->hasUncachedFunctions = hasUncachedFunctions;
     entry->promotionAttempted = promotion;
@@ -323,7 +332,7 @@ public:
 
 private:
     CachedVMSourceProvider(const String& cached, const SourceProvider& original, unsigned hash)
-        : StringSourceProvider(cached, original.sourceOrigin(), original.sourceTaintedOrigin(), String(original.sourceURL()), original.startPosition(), original.sourceType())
+        : StringSourceProvider(cached, original.sourceOrigin(), original.taintedness(), String(original.sourceURL()), original.startPosition(), original.sourceType(), original.provenance())
         , m_hash(hash)
     {
     }
@@ -473,5 +482,70 @@ JSC_DEFINE_HOST_FUNCTION(nodeVMCompilationCachePolicyTest, (JSGlobalObject * glo
 JSValue createNodeVMCompilationCachePolicyTest(Zig::GlobalObject* globalObject)
 {
     return JSFunction::create(globalObject->vm(), globalObject, 0, "nodeVMCompilationCachePolicyTest"_s, nodeVMCompilationCachePolicyTest, ImplementationVisibility::Public);
+}
+
+// The JS VM API cannot label source providers. These internal-only hooks exercise the
+// real cache and execution paths with each engine metadata combination.
+JSValue NodeVMCompilationCache::testSource(JSGlobalObject* globalObject, CallFrame* callFrame)
+{
+    auto& vm = globalObject->vm();
+    auto scope = DECLARE_THROW_SCOPE(vm);
+    THROW_AND_RETURN_IF_CODE_GENERATION_FROM_STRINGS_IS_STRICT(globalObject, scope, {});
+    String text = callFrame->argument(0).toWTFString(globalObject);
+    RETURN_IF_EXCEPTION(scope, {});
+    SourceTaintedness taintedness;
+    taintedness[SourceTaintKind::ScriptTrackingPrivacy] = static_cast<SourceTaintedOrigin>(callFrame->argument(1).toUInt32(globalObject) & 3);
+    RETURN_IF_EXCEPTION(scope, {});
+    taintedness[SourceTaintKind::PrevalentDomain] = static_cast<SourceTaintedOrigin>(callFrame->argument(2).toUInt32(globalObject) & 3);
+    RETURN_IF_EXCEPTION(scope, {});
+    SourceProvenance provenance = callFrame->argument(3).toBoolean(globalObject) ? SourceProvenance::Static : SourceProvenance::GeneratedAtRuntime;
+    unsigned mode = callFrame->argument(4).toUInt32(globalObject);
+    RETURN_IF_EXCEPTION(scope, {});
+    SourceCode source = makeSource(text, SourceOrigin(), taintedness, "vm-source-metadata.js"_s, TextPosition(), SourceProviderSourceType::Program, provenance);
+    Identity identity { 0, 0, Kind::Script, true, false, {}, NoLexicallyScopedFeatures };
+    auto& cache = WebCore::clientData(vm)->nodeVMCompilationCache;
+    if (mode == 2) {
+        if (auto* entry = cache.find(source, identity))
+            entry->decoded = Weak<UnlinkedProgramCodeBlock>();
+    }
+    ProgramExecutable* executable = nullptr;
+    ParserError error;
+    auto* block = mode ? cache.getOrCompile(globalObject, executable, source, identity, false, error)
+                       : vm.codeCache()->getUnlinkedProgramCodeBlock(vm, ProgramExecutable::create(globalObject, source), source, {}, error);
+    if (!block) {
+        if (error.isValid())
+            throwException(globalObject, scope, error.toErrorObject(globalObject, source));
+        return {};
+    }
+    Strong<UnlinkedProgramCodeBlock> protectedBlock(vm, block);
+    NakedPtr<JSC::Exception> exception;
+    JSValue result = evaluate(globalObject, source, block, globalObject, exception);
+    if (exception)
+        throwException(globalObject, scope, exception);
+    return result;
+}
+
+JSC_DEFINE_HOST_FUNCTION(jsRunNodeVMSourceForTesting, (JSGlobalObject * globalObject, CallFrame* callFrame))
+{
+    return JSValue::encode(NodeVMCompilationCache::testSource(globalObject, callFrame));
+}
+
+JSC_DEFINE_HOST_FUNCTION(jsNodeVMSourceMetadataForTesting, (JSGlobalObject * globalObject, CallFrame* callFrame))
+{
+    auto& vm = globalObject->vm();
+    auto scope = DECLARE_THROW_SCOPE(vm);
+    JSArray* result = constructEmptyArray(globalObject, nullptr);
+    RETURN_IF_EXCEPTION(scope, {});
+    StackVisitor::visit(callFrame, vm, [&](StackVisitor& visitor) -> IterationStatus {
+        if (auto* block = visitor->codeBlock()) {
+            auto* provider = block->source().provider();
+            result->putDirectIndex(globalObject, 0, jsNumber(static_cast<unsigned>(provider->sourceTaintedOrigin(SourceTaintKind::ScriptTrackingPrivacy))));
+            result->putDirectIndex(globalObject, 1, jsNumber(static_cast<unsigned>(provider->sourceTaintedOrigin(SourceTaintKind::PrevalentDomain))));
+            result->putDirectIndex(globalObject, 2, jsBoolean(provider->provenance() == SourceProvenance::Static));
+            return IterationStatus::Done;
+        }
+        return IterationStatus::Continue;
+    });
+    return JSValue::encode(result);
 }
 }

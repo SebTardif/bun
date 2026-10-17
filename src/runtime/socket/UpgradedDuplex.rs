@@ -62,6 +62,10 @@ pub(crate) struct UpgradedDuplex {
     pub pending_close: Cell<bool>,
     /// [`Self::shutdown`] arrived before the engine existed. [`Self::drain_pending`] replays it.
     pub pending_shutdown: Cell<bool>,
+    /// `pause_stream` paused the wrapped stream and `resume_stream` has not run since.
+    paused_origin: Cell<bool>,
+    /// Socket shutdown can still be draining queued ciphertext after `end()`.
+    is_node_socket: bool,
 }
 
 bun_event_loop::impl_timer_owner!(UpgradedDuplex; from_timer_ptr => event_loop_timer);
@@ -223,13 +227,55 @@ impl UpgradedDuplex {
         js_wrapper.ensure_still_alive();
 
         (self.handlers.on_close)(self.handlers.ctx);
+        // Left paused, a net.Socket transport never reads its peer's FIN and stays open.
+        if self.paused_origin.get() {
+            self.resume_stream();
+        }
 
         // Early teardown (struct itself is dropped later by parent).
         self.teardown();
         js_wrapper.ensure_still_alive();
     }
 
-    fn call_write_or_end(&self, data: Option<&[u8]>) {
+    /// https://github.com/nodejs/node/blob/v26.3.0/lib/internal/js_stream_socket.js#L117-L125
+    #[uws_callback(export = "UpgradedDuplex__pause_stream")]
+    pub(crate) fn pause_stream(&self) -> bool {
+        // Like a connecting fd: `on_open` forgets the owner's pause, so nothing would resume this one.
+        let paused = self.wrapper_ref().is_some() && self.call_origin("pause");
+        self.paused_origin.set(self.paused_origin.get() || paused);
+        paused
+    }
+
+    #[uws_callback(export = "UpgradedDuplex__resume_stream")]
+    pub(crate) fn resume_stream(&self) -> bool {
+        self.paused_origin.set(false);
+        self.call_origin("resume")
+    }
+
+    /// `origin[name]()`. A throw goes to `on_error`. False when the call did not complete.
+    fn call_origin(&self, name: &str) -> bool {
+        let duplex = self.origin.get();
+        if duplex.is_empty() {
+            return false;
+        }
+        let Some(global) = self.global else {
+            return false;
+        };
+        let result = match duplex.get(&global, name) {
+            Ok(Some(method)) if method.is_callable() => method.call(&global, duplex, &[]),
+            Ok(_) => return false,
+            Err(err) => Err(err),
+        };
+        match result {
+            Ok(_) => true,
+            Err(err) => {
+                (self.handlers.on_error)(self.handlers.ctx, global.take_error(err));
+                false
+            }
+        }
+    }
+
+    fn call_write_or_end(&self, data: Option<&[u8]>, msg_more: bool) {
         // No JS duplex to talk to: the zeroed placeholder, or the owning
         // socket's finalizer abandoned it (`abandon_js_side`).
         let duplex = self.origin.get();
@@ -239,7 +285,33 @@ impl UpgradedDuplex {
         // global is set in `from()` whenever origin is set.
         let Some(global) = self.global else { return };
 
-        let name = if data.is_some() { "write" } else { "end" };
+        // Teardown-phase bytes (close_notify / the trailing end()) aimed at a
+        // duplex whose write side already ended (TLS-inception teardown) only
+        // surface a spurious EPIPE - drop them. Ordinary data writes skip the
+        // probe so write-after-end still errors like node.
+        // A peer's close_notify still leaves our writable half open.
+        let teardown = data.is_none() || self.is_shutdown();
+        if teardown {
+            // A readable EOF still permits close_notify while the transport is writable.
+            // Node ends no destroyed stream.
+            // Socket queues must drain without another write-after-FIN error. A generic
+            // Duplex with a pending end still needs its write error to complete shutdown.
+            let ended = if self.is_node_socket {
+                "writableEnded"
+            } else {
+                "writableFinished"
+            };
+            for property in [ended, "destroyed"] {
+                match duplex.get(&global, property) {
+                    Ok(Some(done)) if done.to_boolean() => return,
+                    Ok(_) => {}
+                    // Best-effort probe: consume the exception and fall through.
+                    Err(err) => drop(global.take_exception(err)),
+                }
+            }
+        }
+
+        let name = if msg_more { "write" } else { "end" };
         let write_or_end = match duplex.get(&global, name) {
             Ok(Some(f)) if f.is_callable() => f,
             Ok(_) => return,
@@ -282,7 +354,7 @@ impl UpgradedDuplex {
         // Scenario 2: will not write if a exception is thrown (will be handled by onError)
         // Scenario 3: will be queued in memory and will be flushed later
         // Scenario 4: no write/end function exists (will be handled by onError)
-        self.call_write_or_end(Some(encoded_data));
+        self.call_write_or_end(Some(encoded_data), true);
     }
 
     #[uws_callback(export = "UpgradedDuplex__flush")]
@@ -318,23 +390,11 @@ impl UpgradedDuplex {
             self.drain_pending_shutdown();
             return;
         }
-        // Taking ownership is load-bearing: a re-entrant `teardown()` clears
-        // `pending_data`, and BoringSSL must not have the slice freed under it.
+        // Taking ownership is load-bearing: a re-entrant `teardown()` clears `pending_data`.
         let staged = self.pending_data.replace(Vec::new());
         self.reset_timeout();
-        // Feed in bounded slices rather than one concatenated buffer. Each JS
-        // chunk was originally delivered on its own; `receive_data` casts the
-        // length to `c_int` with a panicking `expect`, so handing it the sum of
-        // every chunk staged in the window would turn a large pre-start burst
-        // into a process abort. Re-check the engine each round: BoringSSL can
-        // re-enter and tear it down partway through, and `teardown()` neuters
-        // in place (frees the SSL, keeps the Option `Some`), so the live
-        // signal is the SSL handle, not the Option.
-        for chunk in staged.chunks(64 * 1024) {
-            match self.wrapper_ref() {
-                Some(w) if w.ssl.get().is_some() => w.receive_data(chunk),
-                _ => break,
-            }
+        if let Some(w) = self.wrapper_ref() {
+            w.receive_data(&staged);
         }
         self.drain_pending_shutdown();
     }
@@ -370,6 +430,7 @@ impl UpgradedDuplex {
         global: &JSGlobalObject,
         js_wrapper: JSValue,
         origin: JSValue,
+        is_node_socket: bool,
         handlers: Handlers,
     ) -> UpgradedDuplex {
         js_TLSSocket::duplex_origin_set_cached(js_wrapper, global, origin);
@@ -392,6 +453,8 @@ impl UpgradedDuplex {
             pending_data: JsCell::new(Vec::new()),
             pending_close: Cell::new(false),
             pending_shutdown: Cell::new(false),
+            paused_origin: Cell::new(false),
+            is_node_socket,
         }
     }
 
@@ -704,7 +767,7 @@ fn end_transport(_global: &JSGlobalObject, frame: &CallFrame) -> JsResult<JSValu
         let socket = unsafe { &*socket.as_ptr() };
         if let bun_uws::InternalSocket::UpgradedDuplex(duplex) = socket.socket.get().socket {
             // SAFETY: this live handle was installed by DuplexUpgradeContext::duplex_socket.
-            unsafe { &*duplex.cast::<UpgradedDuplex>() }.call_write_or_end(None);
+            unsafe { &*duplex.cast::<UpgradedDuplex>() }.call_write_or_end(None, false);
         }
     }
     Ok(JSValue::UNDEFINED)

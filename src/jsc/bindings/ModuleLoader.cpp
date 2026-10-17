@@ -298,13 +298,6 @@ OnLoadResult handleOnLoadResultNotPromise(Zig::GlobalObject* globalObject, JSC::
         return result;
     }
 
-    // Source a plugin supplies is a string made into script. What it supplies for a loader of
-    // data (json, toml, ...) or as an object is not.
-    if (Bun::mayNotMakeScriptFromStrings() && (loader == BunLoaderTypeJS || loader == BunLoaderTypeJSX || loader == BunLoaderTypeTS || loader == BunLoaderTypeTSX)) [[unlikely]] {
-        result.value.error = Bun::createCodeGenerationFromStringsError(globalObject);
-        return result;
-    }
-
     result.value.sourceText.loader = loader;
     result.value.sourceText.value = JSValue {};
     result.value.sourceText.string = {};
@@ -691,8 +684,7 @@ JSValue fetchCommonJSModule(
         return {};
 
     if (Bun::isDataOrBlobURL(specifierWtfString)) [[unlikely]] {
-        Bun::throwIfMayNotMakeScriptFromStrings(globalObject, scope);
-        RETURN_IF_EXCEPTION(scope, {});
+        THROW_AND_RETURN_IF_CODE_GENERATION_FROM_STRINGS_IS_STRICT(globalObject, scope, {});
     }
 
     String fileURLPath = specifierWtfString;
@@ -883,8 +875,7 @@ JSValue fetchCommonJSModuleNonBuiltin(
     JSC::JSModuleLoader* loader = Bun::moduleLoaderOf(globalObject, scope, target->moduleGraph());
     RETURN_IF_EXCEPTION(scope, {});
     if (Bun::isDataOrBlobURL(specifierWtfString)) [[unlikely]] {
-        Bun::throwIfMayNotMakeScriptFromStrings(globalObject, scope);
-        RETURN_IF_EXCEPTION(scope, {});
+        THROW_AND_RETURN_IF_CODE_GENERATION_FROM_STRINGS_IS_STRICT(globalObject, scope, {});
     }
     {
         if constexpr (isExtension) {
@@ -1064,9 +1055,6 @@ static JSValue fetchESMSourceCode(
             return code;
         }
     };
-
-    if (Bun::mayNotMakeScriptFromStrings() && Bun::isDataOrBlobURL(specifier->toWTFString(BunString::ZeroCopy))) [[unlikely]]
-        return reject(Bun::createCodeGenerationFromStringsError(globalObject));
 
     bool wasModuleMock = false;
 

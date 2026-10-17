@@ -1681,12 +1681,20 @@ class ChildProcess extends EventEmitter {
         throw $ERR_INVALID_ARG_TYPE("message", ["string", "object", "number", "boolean"], message);
       }
       const pending = this.#failedIpcPending;
-      const error = pending
-        ? new ErrnoException(process.binding("uv").UV_EPIPE, "write")
-        : $ERR_IPC_CHANNEL_CLOSED("Channel closed");
+      const error = pending ? new ErrnoException(process.binding("uv").UV_EPIPE, "write") : $ERR_IPC_CHANNEL_CLOSED();
       if (callback) process.nextTick(callback, error);
       else process.nextTick(() => this.emit("error", error));
       return pending;
+    }
+
+    if (!this.connected) {
+      const ex = $ERR_IPC_CHANNEL_CLOSED();
+      if (callback) {
+        process.nextTick(callback, ex);
+      } else {
+        process.nextTick(() => this.emit("error", ex));
+      }
+      return false;
     }
 
     // We still need this send function because

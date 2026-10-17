@@ -270,12 +270,12 @@ describe("vm", () => {
 
       try {
         compileFunction("Object.prototype.polluted = true; return 'done';")();
-        expect(Object.prototype.polluted).toBeUndefined();
+        expect((Object.prototype as any).polluted).toBeUndefined();
       } catch (e) {
         // Throwing is acceptable
       } finally {
         // Clean up just in case
-        delete Object.prototype.polluted;
+        delete (Object.prototype as any).polluted;
         Object.prototype.hasOwnProperty = originalHasOwnProperty;
       }
     });
@@ -366,7 +366,7 @@ describe("Script", () => {
     for (const opts of [undefined, { displayErrors: true }, { displayErrors: false }]) {
       let err: any;
       try {
-        new Script("%%", opts);
+        new Script("%%", opts as any);
       } catch (e) {
         err = e;
       }
@@ -613,14 +613,12 @@ function testRunInContext({ fn, isIsolated, isNew }: TestRunInContextArg) {
     });
     test("cannot access global scope", () => {
       const prop = randomProp();
-      // @ts-expect-error
       globalThis[prop] = "fizz";
       try {
         const context = createContext({});
         const result = fn(`typeof ${prop};`, context);
         expect(result).toBe("undefined");
       } finally {
-        // @ts-expect-error
         delete globalThis[prop];
       }
     });
@@ -634,38 +632,29 @@ function testRunInContext({ fn, isIsolated, isNew }: TestRunInContextArg) {
   } else {
     test("can access global context", () => {
       const props = randomProps(2);
-      // @ts-expect-error
       globalThis[props[0]] = "bar";
-      // @ts-expect-error
       globalThis[props[1]] = (n: number) => "buzz".repeat(n);
       try {
         const result = fn(`${props[0]} + ${props[1]}(2);`);
         expect(result).toBe("barbuzzbuzz");
       } finally {
         for (const prop of props) {
-          // @ts-expect-error
           delete globalThis[prop];
         }
       }
     });
     test("can modify global context", () => {
       const props = randomProps(3);
-      // @ts-expect-error
       globalThis[props[0]] = ["a", "b", "c"];
-      // @ts-expect-error
       globalThis[props[1]] = "initial value";
       try {
         const result = fn(`${props[1]} = 'baz'; ${props[2]} = 'bunny'; delete ${props[0]}[0];`);
-        // @ts-expect-error
         expect(globalThis[props[1]]).toBe("baz");
-        // @ts-expect-error
         expect(globalThis[props[2]]).toBe("bunny");
-        // @ts-expect-error
         expect(globalThis[props[0]]).toEqual([undefined, "b", "c"]);
         expect(result).toBe(true);
       } finally {
         for (const prop of props) {
-          // @ts-expect-error
           delete globalThis[prop];
         }
       }
@@ -676,13 +665,11 @@ function testRunInContext({ fn, isIsolated, isNew }: TestRunInContextArg) {
     });
     test("can access this context", () => {
       const prop = randomProp();
-      // @ts-expect-error
       globalThis[prop] = "fizz";
       try {
         const result = fn(`${prop};`);
         expect(result).toBe("fizz");
       } finally {
-        // @ts-expect-error
         delete globalThis[prop];
       }
     });
@@ -741,7 +728,7 @@ function randomProp() {
   return "prop" + crypto.randomUUID().replace(/-/g, "");
 }
 function randomProps(propsNumber = 0) {
-  const props = [];
+  const props: string[] = [];
   for (let i = 0; i < propsNumber; i++) {
     props.push(randomProp());
   }
@@ -874,9 +861,9 @@ resp.text().then((a) => {
 });
 
   `;
-    URL.prototype.ok = true;
+    (URL.prototype as any).ok = true;
     await runInContext(code, context);
-    delete URL.prototype.ok;
+    delete (URL.prototype as any).ok;
   }
 });
 
@@ -1190,7 +1177,7 @@ test("can't use bytecode from a different script", () => {
 
 test("SourceTextModule accepts the cachedData it produced", () => {
   const source = `{ function inBlock() { return 1; } }\nexport default await Promise.resolve(inBlock);`; // module-only syntax, and a block function (strict semantics)
-  const cachedData = new SourceTextModule(source, { identifier: "m" }).createCachedData();
+  const cachedData = (new SourceTextModule(source, { identifier: "m" }) as any).createCachedData();
   expect(cachedData.length).toBeGreaterThan(0);
   expect(() => new SourceTextModule(source, { identifier: "m", cachedData })).not.toThrow(); // ERR_VM_MODULE_CACHED_DATA_REJECTED otherwise
   expect(() => new SourceTextModule("export default 2;", { identifier: "m", cachedData })).toThrow(
@@ -2823,7 +2810,7 @@ test("SourceTextModule applies lineOffset and columnOffset to reported positions
       fromScript = position(e);
     }
     const module = new SourceTextModule(code, { identifier: "offset.mjs", ...options });
-    await module.link(() => {});
+    await module.link((() => {}) as any);
     try {
       await module.evaluate();
     } catch (e) {
@@ -3677,6 +3664,102 @@ test.concurrent("vm compilation admission counts distinct sources before retaini
     `,
     ],
     env: { ...bunEnv, BUN_VM_COMPILE_CACHE_SIZE: "268435456", BUN_VM_COMPILE_CACHE_THRESHOLD: "1750" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+});
+
+describe("compilation-cache source security metadata", () => {
+  async function runMetadataFixture(enforce: boolean) {
+    using dir = tempDir("vm-cache-source-metadata", {
+      "fixture.mjs": `
+        import assert from "node:assert/strict";
+        import { runNodeVMSource as run, nodeVMSourceMetadata, nodeVMCompilationCacheStats as stats } from "bun:internal-for-testing";
+        globalThis.sourceMetadata = nodeVMSourceMetadata;
+        const enforce = ${enforce};
+        const text = "[sourceMetadata(), (function nested() { return sourceMetadata(); })()]";
+        const before = stats();
+        const seen = new Set();
+        // Equal text with every taint/provenance pair must behave as a fresh compile,
+        // including when an earlier entry has the opposite provenance.
+        for (const mode of [0, 1, 1, 2]) {
+          for (const staticSource of [true, false, true]) {
+            for (let tracking = 0; tracking < 4; tracking++) {
+              for (let prevalent = 0; prevalent < 4; prevalent++) {
+                const key = JSON.stringify([tracking, prevalent, staticSource]);
+                const hits = stats().hits;
+                if (enforce && !staticSource) {
+                  assert.throws(() => run(text, tracking, prevalent, staticSource, mode), EvalError);
+                } else {
+                  const expected = [tracking, prevalent, staticSource];
+                  assert.deepEqual(run(text, tracking, prevalent, staticSource, mode), [expected, expected]);
+                }
+                if (mode) {
+                  assert.equal(stats().hits - hits, seen.has(key) ? 1 : 0);
+                  seen.add(key);
+                }
+              }
+            }
+          }
+        }
+        assert.ok(stats().hits > before.hits);
+        assert.ok(stats().decodes > before.decodes);
+        for (const mode of [0, 1, 1, 2]) {
+          for (const text of ['eval("40 + 2")', 'Function("return 42")()']) {
+            if (enforce) {
+              // Static containing code does not make its dynamically generated code static.
+              assert.throws(() => run(text, 0, 0, true, mode), EvalError);
+            } else {
+              assert.equal(run(text, 0, 0, true, mode), 42);
+            }
+          }
+        }
+        console.log("ok");
+      `,
+    });
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), "--expose-internals", join(String(dir), "fixture.mjs")],
+      env: {
+        ...bunEnv,
+        BUN_VM_COMPILE_CACHE_SIZE: "268435456",
+        BUN_VM_COMPILE_CACHE_THRESHOLD: "0",
+        BUN_JSC_useCodeCache: "false",
+        BUN_JSC_disallowNonStaticCode: enforce ? "true" : "false",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+  }
+
+  test.each([false, true])(
+    "cache hits and decoded payloads preserve both taint kinds and provenance (enforce=%s)",
+    runMetadataFixture,
+  );
+});
+
+test("source metadata test hooks cannot bypass strict code generation", async () => {
+  using dir = tempDir("vm-cache-source-strict", {
+    "fixture.mjs": `
+      import assert from "node:assert/strict";
+      import { runNodeVMSource } from "bun:internal-for-testing";
+      for (const mode of [0, 1, 2]) {
+        assert.throws(() => runNodeVMSource("42", 0, 0, true, mode), { name: "EvalError" });
+      }
+      console.log("ok");
+    `,
+  });
+  await using proc = Bun.spawn({
+    cmd: [
+      bunExe(),
+      "--disallow-code-generation-from-strings=strict",
+      "--expose-internals",
+      join(String(dir), "fixture.mjs"),
+    ],
+    env: bunEnv,
     stdout: "pipe",
     stderr: "pipe",
   });

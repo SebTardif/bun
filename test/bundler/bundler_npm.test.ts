@@ -3,6 +3,8 @@ import { itBundled } from "./expectBundled";
 
 describe("bundler", () => {
   itBundled("npm/ReactSSR", {
+    // The fork retains call-start sourcemap mappings rather than upstream's argument positions.
+    failing: true,
     install: ["react@18.3.1", "react-dom@18.3.1"],
     files: {
       "/entry.tsx": /* tsx */ `

@@ -97,6 +97,13 @@ function prebuiltSuffix(cfg: Config): string {
   if (cfg.debug) s += "-debug";
   else if (cfg.lto) s += "-lto";
   if (cfg.asan) s += "-asan";
+  // Built for fuzzing, for this target only (`FUZZING` in oven-sh/WebKit's
+  // .github/scripts/lanes.mjs). Every other combination gets a JSC without
+  // assertions (unless debug or asan) and without coverage.
+  if (cfg.linux && cfg.x64 && cfg.abi === "gnu" && cfg.release && !cfg.lto && !cfg.asan) {
+    if (cfg.assertions) s += "-assertions";
+    if (cfg.fuzzilli) s += "-coverage";
+  }
   return s;
 }
 
@@ -367,6 +374,8 @@ export const webkit: Dependency = {
       // Bun's C++ is compiled with ASSERT_ENABLED=1 when cfg.assertions (release-asan,
       // release-assertions); WebKit must match or ASSERT-only symbols fail to link.
       ...(cfg.assertions && cfg.release ? { ENABLE_ASSERTS: "ON" } : {}),
+      // JSC compiled with the coverage flag bun's own C++ gets (flags.ts); FuzzilliREPRL.cpp has the callbacks.
+      ...(cfg.fuzzilli ? { ENABLE_FUZZILLI: "ON" } : {}),
     };
 
     const spec: NestedCmakeBuild = {

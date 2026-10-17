@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Sync oven-sh/bun through `f2405c382d43b89d91a2e7c90d9c5f53505a1e71`, including native lint/format commands, while reconciling fork TLS, worker, module-resolution, CLI and parser fixes. Pin the qualified WebKit release `f8521bb45429b3e1df6bc6d9b98b8df4376a89c5`.
+
 - Avoid quadratic Worker file-descriptor tracking when many descriptors are open, while preserving automatic cleanup at Worker exit.
 
 - Skip issue finder, issue deduplication, and VS Code publishing workflows that require upstream-only credentials in the fork.
@@ -237,7 +239,6 @@
 - Reduce kernel CPU during cold module imports on macOS by serializing transpiler-cache writes while preserving parallel parsing and cache reads.
 
 - Keep ESM namespaces free of inherited `__esModule` markers and preserve the own marker and live exports for `require(esm)`, fixing Vite/tsx namespace interop. Adapts [oven-sh/bun#33894](https://github.com/oven-sh/bun/pull/33894) and [oven-sh/WebKit#279](https://github.com/oven-sh/WebKit/pull/279). Thanks @robobun!
-
 
 - Sync oven-sh/bun through `c7b06d94bac19817ba34b6677bb1099fb4f6d2be`, preserving fork fixes and incorporating TLS handshake shutdown, macOS split-DNS failover, file-body cloning, Buffer write validation, mimalloc 3.5.3 and idle-memory release.
 - Pin immutable [OpenClaw WebKit `42ab38d705`](https://github.com/openclaw/WebKit/releases/tag/autobuild-42ab38d705d4838748ccee77e7deb0e4e35515ee) by archive checksum, together with the required namespace facade integration from #106; retain fail-closed artifact selection.

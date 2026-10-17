@@ -70,7 +70,8 @@ test.todo("name property is used for function calls in Bun.inspect with bound ob
   expect(WRONG()).toContain("at RIGHT");
 });
 
-test("err.line and err.column are set", async () => {
+// Fork main and the sync retain call-start columns; keep the upstream expectation visible.
+test.failing("err.line and err.column are set", async () => {
   expect(await bunRun(join(import.meta.dir, "err-stack-fixture.js"))).toSpawn(
     JSON.stringify(
       {

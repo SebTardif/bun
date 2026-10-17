@@ -16,6 +16,7 @@ describe("fs.opendir", () => {
   // );
 
   it("throws if callback is not provided", () => {
+    // @ts-expect-error
     expect(() => fs.opendir("foo")).toThrow(/The "callback" argument must be of type function/);
   });
 
@@ -74,7 +75,7 @@ describe("fs.Dir", () => {
 
       describe("reading from the directory", () => {
         it.each([0, 1, false, "foo", {}])("throws if passed a non-function callback (%p)", badCb => {
-          expect(() => dir.read(badCb)).toThrow(/The "callback" argument must be of type function/);
+          expect(() => dir.read(badCb as any)).toThrow(/The "callback" argument must be of type function/);
         });
 
         it("it can be read synchronously, even though no entries exist", () => {
@@ -177,6 +178,7 @@ describe("opendirSync string encoding shorthand", () => {
     fs.mkdirSync(dirname);
     try {
       // an invalid encoding passed as the shorthand is validated like node
+      // @ts-expect-error
       expect(() => fs.opendirSync(dirname, "nope")).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
     } finally {
       fs.rmSync(dirname, { recursive: true, force: true });
@@ -193,7 +195,7 @@ describe("opendirSync string encoding shorthand", () => {
     // reinterpreted per-byte.
     fs.writeFileSync(path.join(dirname, "na\u00efve.txt"), "x");
     try {
-      const dir = fs.opendirSync(dirname, "latin1");
+      const dir = fs.opendirSync(dirname, "latin1" as any);
       const entry = dir.readSync();
       expect(entry?.name).toBe(Buffer.from("na\u00efve.txt", "utf8").toString("latin1"));
       dir.closeSync();
@@ -213,7 +215,7 @@ describe("directory entries with buffer names", () => {
       (dir, options) => {
         using handle = fs.opendirSync(dir, options);
         const entries = [];
-        for (let entry; (entry = handle.readSync()) !== null; ) entries.push(entry);
+        for (let entry; (entry = handle.readSync()) !== null;) entries.push(entry);
         return entries;
       },
     ],
@@ -222,7 +224,7 @@ describe("directory entries with buffer names", () => {
       async (dir, options) => {
         await using handle = await promisify(fs.opendir)(dir, options);
         const entries = [];
-        for (let entry; (entry = await promisify(handle.read.bind(handle))()) !== null; ) entries.push(entry);
+        for (let entry; (entry = await promisify(handle.read.bind(handle))()) !== null;) entries.push(entry);
         return entries;
       },
     ],
@@ -231,7 +233,7 @@ describe("directory entries with buffer names", () => {
       async (dir, options) => {
         await using handle = await fs.promises.opendir(dir, options);
         const entries = [];
-        for (let entry; (entry = await handle.read()) !== null; ) entries.push(entry);
+        for (let entry; (entry = await handle.read()) !== null;) entries.push(entry);
         return entries;
       },
     ],

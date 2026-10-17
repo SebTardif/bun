@@ -68,7 +68,8 @@ bun_core::declare_scope!(cache, visible);
 /// Version 36: Runtime plugin imports retain their original specifiers and resolve when executed.
 /// Version 37: Preserve builtin error constructors and their stack positions and frames.
 /// Version 38: Retain runtime call syntax and map opening call/property delimiters.
-const EXPECTED_VERSION: u32 = 38;
+/// Version 39: Long hexadecimal, octal and binary literals are rounded to the nearest double.
+const EXPECTED_VERSION: u32 = 39;
 
 /// Source files smaller than this are not written to / read from the on-disk
 /// transpiler cache. Originally 50 KiB, which excluded almost every file in a

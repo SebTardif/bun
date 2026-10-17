@@ -1,4 +1,4 @@
-import { dlopen, FFIType } from "bun:ffi";
+import { dlopen, FFIType, type Library } from "bun:ffi";
 import { describe, expect, test } from "bun:test";
 import { bunEnv, bunExe, isMusl, isWindows, tempDir } from "harness";
 import fs from "node:fs";
@@ -404,7 +404,8 @@ describe("Bun.Terminal subprocess integration", () => {
               ...termiosDecls,
             })
           : dlopen("libutil.so.1", { openpty: openptyDecl });
-    const libc = process.platform === "darwin" || isMusl ? lib : dlopen("libc.so.6", termiosDecls);
+    const libc: Library<typeof termiosDecls> =
+      process.platform === "darwin" || isMusl ? (lib as any) : dlopen("libc.so.6", termiosDecls);
 
     const masterBuf = new Int32Array(1);
     const slaveBuf = new Int32Array(1);
@@ -922,11 +923,13 @@ static const struct { const void *replacement; const void *original; } interpose
     "fixture.js": `
       let output = "";
       const proc = Bun.spawn(["/bin/sh", "-c", 'printf "%0512d" 0; exit 3'], {
+        // Only the parent needs interposition; the system shell may require arm64e.
+        env: { ...process.env, DYLD_INSERT_LIBRARIES: undefined },
         terminal: { data(_, bytes) { output += new TextDecoder().decode(bytes); } },
       });
       const code = await proc.exited;
       proc.terminal.close();
-      console.log(JSON.stringify({ length: output.length, code }));
+      console.log(JSON.stringify({ output, code }));
     `,
   });
   const library = `${dir}/delay-watch.dylib`;
@@ -939,16 +942,21 @@ static const struct { const void *replacement; const void *original; } interpose
   const compilerError = await compiler.stderr.text();
   expect(compilerError).toBe("");
   expect(await compiler.exited).toBe(0);
-  await using proc = Bun.spawn({
-    cmd: [bunExe(), `${dir}/fixture.js`],
-    env: { ...bunEnv, DYLD_INSERT_LIBRARIES: library },
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 3000,
-    killSignal: "SIGKILL",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
-  expect(stderr).toContain("ESRCH-before-reap");
-  expect(JSON.parse(stdout)).toEqual({ length: 512, code: 3 });
-  expect(exitCode).toBe(0);
+  const maxSetupAttempts = 20;
+  for (let attempt = 0; attempt < maxSetupAttempts; attempt++) {
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), `${dir}/fixture.js`],
+      env: { ...bunEnv, DYLD_INSERT_LIBRARIES: library },
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 3000,
+      killSignal: "SIGKILL",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect(JSON.parse(stdout)).toEqual({ output: Buffer.alloc(512, "0").toString(), code: 3 });
+    expect(exitCode).toBe(0);
+    // INEXIT can still accept registration; retry setup only after checking this child's behavior.
+    if (stderr.includes("ESRCH-before-reap")) return;
+  }
+  throw new Error(`ESRCH precondition was not reached after ${maxSetupAttempts} terminal child exits`);
 });

@@ -12,7 +12,8 @@ if (process.env.IS_SUBPROCESS) {
   process.exit(0);
 }
 
-test.concurrent("absolute path to a file that is symlinked has import.meta.main", async () => {
+// The fork preserves the invoked symlink in argv[1], while upstream expects its real path.
+test.concurrent.failing("absolute path to a file that is symlinked has import.meta.main", async () => {
   const root = tmpdirSync();
   try {
     symlinkSync(process.argv[1], root + "/main.js");
