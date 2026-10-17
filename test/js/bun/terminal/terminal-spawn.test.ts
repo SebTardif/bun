@@ -923,6 +923,8 @@ static const struct { const void *replacement; const void *original; } interpose
     "fixture.js": `
       let output = "";
       const proc = Bun.spawn(["/bin/sh", "-c", 'printf "%0512d" 0; exit 3'], {
+        // Only the parent needs interposition; the system shell may require arm64e.
+        env: { ...process.env, DYLD_INSERT_LIBRARIES: undefined },
         terminal: { data(_, bytes) { output += new TextDecoder().decode(bytes); } },
       });
       const code = await proc.exited;
