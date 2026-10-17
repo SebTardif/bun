@@ -927,7 +927,7 @@ static const struct { const void *replacement; const void *original; } interpose
       });
       const code = await proc.exited;
       proc.terminal.close();
-      console.log(JSON.stringify({ length: output.length, code }));
+      console.log(JSON.stringify({ output, code }));
     `,
   });
   const library = `${dir}/delay-watch.dylib`;
@@ -950,6 +950,6 @@ static const struct { const void *replacement; const void *original; } interpose
   });
   const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
   expect(stderr).toContain("ESRCH-before-reap");
-  expect(JSON.parse(stdout)).toEqual({ length: 512, code: 3 });
+  expect(JSON.parse(stdout)).toEqual({ output: Buffer.alloc(512, "0").toString(), code: 3 });
   expect(exitCode).toBe(0);
 });

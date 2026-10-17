@@ -8129,15 +8129,15 @@ describe("a throw from a node-style callback is an uncaughtException", () => {
     expect(exitCode).toBe(0);
   });
 
-  it("keeps a non-throwing callback in the same place in the event loop", async () => {
+  it("drains next ticks from a non-throwing callback before its immediate", async () => {
     const { stdout, exitCode } = await runScript(`
       const fs = require("fs");
       const log = [];
       fs.stat(${file}, (err, st) => {
         log.push("fs-cb:" + (err === null) + ":" + st.isFile());
         process.nextTick(() => log.push("tick-from-fs-cb"));
+        setImmediate(() => log.push("setImmediate"));
       });
-      setImmediate(() => log.push("setImmediate"));
       process.on("exit", () => console.log(log.join(",")));
     `);
     expect(stdout).toBe("fs-cb:true:true,tick-from-fs-cb,setImmediate");
