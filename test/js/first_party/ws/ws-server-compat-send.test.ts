@@ -764,19 +764,25 @@ describe.each(implementations)("ws server send ($name)", ({ ws: implementation, 
         expect(server.recorder.calls).toEqual([...failedCalls, ["close", 1000, Buffer.alloc(0)]]);
       });
 
-      test.each<{ call: string; act(ws: Socket): void }>([
+      for (const { call, act } of [
         { call: "terminate()", act: ws => ws.terminate() },
         { call: "close()", act: ws => ws.close() },
         { call: 'send("late")', act: ws => ws.send("late") },
-      ])("can call $call: 'close' fires once and nothing follows the Close frame", async ({ act }) => {
-        await using server = await openWithBacklog({}, act);
-        const { client, recorder } = server;
-        client.socket.resume();
-        expect(await client.remainingFrames()).toEqual([`binary ${MiB} bytes`, 'text "x"', "close 1000"]);
-        // Once both ends have closed, nothing is left that could emit another event.
-        await Promise.all([server.closed, client.closed]);
-        expect(recorder.lines).toEqual(["large null", "small null", "close 1000 Buffer()"]);
-      });
+      ] satisfies { call: string; act(ws: Socket): void }[]) {
+        // Known fork divergence: terminating npm ws from a TLS write callback drops queued frames.
+        test.failingIf(!builtin && secure && call === "terminate()")(
+          `can call ${call}: 'close' fires once and nothing follows the Close frame`,
+          async () => {
+            await using server = await openWithBacklog({}, act);
+            const { client, recorder } = server;
+            client.socket.resume();
+            expect(await client.remainingFrames()).toEqual([`binary ${MiB} bytes`, 'text "x"', "close 1000"]);
+            // Once both ends have closed, nothing is left that could emit another event.
+            await Promise.all([server.closed, client.closed]);
+            expect(recorder.lines).toEqual(["large null", "small null", "close 1000 Buffer()"]);
+          },
+        );
+      }
 
       test.concurrent(
         "can throw: the others still run, and 'close' fires once",

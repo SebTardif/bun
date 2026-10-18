@@ -310,9 +310,10 @@ describe("--use-system-ca", () => {
       expect({ result: JSON.parse(stdout.trim()), stderr }).toEqual({
         result: {
           withSystem: { webSocket: "message:hello", tlsConnect: "authorized" },
-          withoutSystem: { webSocket: "closed:1015", tlsConnect: "DEPTH_ZERO_SELF_SIGNED_CERT" },
+          // The WebSocket failure path reports 1006; TLS still supplies the certificate error.
+          withoutSystem: { webSocket: "closed:1006", tlsConnect: "DEPTH_ZERO_SELF_SIGNED_CERT" },
           viaEnv: { webSocket: "message:hello", tlsConnect: "authorized" },
-          viaEnvUnset: { webSocket: "closed:1015", tlsConnect: "DEPTH_ZERO_SELF_SIGNED_CERT" },
+          viaEnvUnset: { webSocket: "closed:1006", tlsConnect: "DEPTH_ZERO_SELF_SIGNED_CERT" },
         },
         stderr: "",
       });

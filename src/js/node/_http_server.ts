@@ -2318,13 +2318,17 @@ function getNodeHTTPServerSocket() {
         this.#pendingAbortMessage = this._httpMessage;
         // Close can arrive during native response notification, after its JS
         // callback was captured. Own this callback instead of replacing it.
-        setImmediate(() => {
+        const notifyClose = () => {
           try {
             if ($isCallable(onclose)) onclose.$call(handle);
           } finally {
             if ($isCallable(callback)) callback(err ?? this.#closeError);
           }
-        });
+        };
+        // An adopted WebSocket has left HTTP dispatch. Completing its destroy
+        // now lets the stream queue 'close' before later send callbacks.
+        if (this[kHandoffResponse]?.upgraded) notifyClose();
+        else setImmediate(notifyClose);
         return;
       }
 
