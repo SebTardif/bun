@@ -78,6 +78,7 @@ class DOMWrapperWorld;
 #include "HTTPHeaderIdentifiers.h"
 #include "BunCommonStrings.h"
 #include "BunCPUProfiler.h"
+#include "Bindgen/SchemaStrings.h"
 #include "DOMURLBaseCache.h"
 #include "NodeHTTPRequestHeaderValues.h"
 #include "NodeVMOptionNames.h"
@@ -87,6 +88,7 @@ class DOMWrapperWorld;
 namespace Zig {
 class GlobalObject;
 }
+class VersionSqlite3;
 
 namespace Bun {
 class StrongRootBlock;
@@ -212,6 +214,7 @@ public:
     // Public so Bun::commonStrings(vm) below is a static_cast and a member load.
     Bun::CommonStrings commonStrings;
     Bun::CPUProfilerState cpuProfilerState;
+    Bun::Bindgen::SchemaStrings schemaStrings;
 
     WebCore::DOMURLBaseCache& urlBaseCache() { return m_urlBaseCache; }
     Bun::NodeHTTPRequestHeaderValues& nodeHTTPRequestHeaderValues() { return m_nodeHTTPRequestHeaderValues; }
@@ -321,6 +324,7 @@ public:
 
 private:
     SentinelLinkedList<JSVMClientDataClient, BasicRawSentinelNode<JSVMClientDataClient>> m_clients;
+    Vector<VersionSqlite3*> m_sqliteDatabases;
     bool m_isWorkerVM { false };
     bool m_isNodeWorkerVM { false };
 
@@ -331,6 +335,8 @@ public:
     bool isNodeWorkerVM() const { return m_isNodeWorkerVM; }
     // VM thread. Unlinking is the client's own (`remove()` in its destructor).
     void addClient(JSVMClientDataClient& client) { m_clients.append(&client); }
+    // VM thread. The bun:sqlite connections this VM has; each one removes itself in its destructor.
+    Vector<VersionSqlite3*>& sqliteDatabases() { return m_sqliteDatabases; }
 };
 
 } // namespace WebCore

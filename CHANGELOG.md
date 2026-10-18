@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Sync oven-sh/bun through `ad4089bf49d9f4c3ab7c8d95a58f3e0f0f186054`, including lint, format, binding, WebSocket and SQL updates, while retaining the fork runtime and CI contracts.
+
 - Share identical `node:vm` script and compiled-function source buffers and source-map URI strings through a bounded per-VM weak index, including after compilation-cache eviction.
 
 - Honor `BUN_FEATURE_FLAG_DISABLE_SOURCE_MAPS` on transpiler-cache hits and prevent startup crashes from cached modules without maps. Adapts empty-map validation from [oven-sh/bun#42412](https://github.com/oven-sh/bun/pull/42412); thanks @robobun.

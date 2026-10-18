@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { bunEnv, bunExe, isWindows } from "harness";
+import { bunEnv, bunExe, isWindows, tempDir } from "harness";
 import assert from "node:assert";
+import fs from "node:fs";
 // import child from "node:child_process";
 import path from "node:path";
 // import fixtures from "./common/fixtures.js";
@@ -119,7 +120,7 @@ describe("path.resolve", () => {
 
   test("preserves a lone UTF-16 surrogate in the resolved path", () => {
     const originalCwd = process.cwd;
-    process.cwd = () => (isWindows ? "C:😀" : "\ude00");
+    process.cwd = () => "\ude00";
     try {
       expect(path.posix.resolve("child")).toBe("\ude00/child");
     } finally {
@@ -351,5 +352,28 @@ describe("path.resolve", () => {
     // On Windows, paths use backslash; on POSIX, forward slash
     const expectedEnding = isWindows ? "\\c" : "/c";
     assert.ok(result.endsWith(expectedEnding));
+  });
+
+  test.skipIf(isWindows)("a backslash at the end of the cwd is part of its name", async () => {
+    using dir = tempDir("resolve-backslash-cwd", { "e\\/z": "" });
+
+    await using proc = Bun.spawn({
+      cmd: [
+        bunExe(),
+        "-e",
+        `const path = require("node:path");
+         console.log(JSON.stringify([path.resolve("z"), path.resolve("."), path.relative("..", "z")]));`,
+      ],
+      env: bunEnv,
+      cwd: path.join(String(dir), "e\\"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+
+    const cwd = fs.realpathSync(String(dir)) + "/e\\";
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toEqual([cwd + "/z", cwd, "e\\/z"]);
+    expect(exitCode).toBe(0);
   });
 });

@@ -16,6 +16,7 @@ use core::ffi::c_char;
 use bun_jsc::virtual_machine::VirtualMachine;
 use bun_jsc::{self as jsc, JSGlobalObject, JSValue, JsError, JsResult, SysErrorJsc};
 
+use crate::generated_bindgen::ssl_config as generated;
 use crate::node::fs as node_fs;
 use crate::webcore::Blob;
 use crate::webcore::blob::store::Data as StoreData;
@@ -178,7 +179,7 @@ pub(crate) trait SSLConfigFromJs: Sized {
     fn from_generated(
         vm: &VirtualMachine,
         global: &JSGlobalObject,
-        generated: &jsc::generated::SSLConfig,
+        generated: &generated::TLSOptions,
         is_server: bool,
     ) -> JsResult<Option<Self>>;
 }
@@ -190,15 +191,14 @@ impl SSLConfigFromJs for SSLConfig {
         value: JSValue,
         is_server: bool,
     ) -> JsResult<Option<SSLConfig>> {
-        let generated = jsc::generated::SSLConfig::from_js(global, value)?;
-        // `generated` dropped at scope exit
+        let generated = generated::TLSOptions::from_js(global, value)?;
         Self::from_generated(vm, global, &generated, is_server)
     }
 
     fn from_generated(
         vm: &VirtualMachine,
         global: &JSGlobalObject,
-        generated: &jsc::generated::SSLConfig,
+        generated: &generated::TLSOptions,
         is_server: bool,
     ) -> JsResult<Option<SSLConfig>> {
         let mut result = SSLConfig::zero();
@@ -292,13 +292,10 @@ impl SSLConfigFromJs for SSLConfig {
         }
 
         let protocols: *const c_char = match &generated.alpn_protocols {
-            jsc::generated::SSLConfigAlpnProtocols::None => core::ptr::null(),
-            jsc::generated::SSLConfigAlpnProtocols::String(val) => {
-                zbox_into_raw(&val.as_ref().to_owned_slice_z())
-            }
-            jsc::generated::SSLConfigAlpnProtocols::Buffer(val) => {
-                // SAFETY: `val.get()` returns a non-null `*mut JSCArrayBuffer`
-                // owned by the GenVal for the duration of `generated`.
+            generated::ALPNProtocols::None => core::ptr::null(),
+            generated::ALPNProtocols::String(val) => zbox_into_raw(&val.to_owned_slice_z()),
+            generated::ALPNProtocols::Buffer(val) => {
+                // SAFETY: `generated` holds a ref on the buffer, and nothing else borrows it here.
                 let buffer: jsc::ArrayBuffer = unsafe { (*val.get()).as_array_buffer() };
                 dupe_z(buffer.byte_slice())
             }
@@ -331,7 +328,7 @@ impl SSLConfigFromJs for SSLConfig {
             return Ok(None);
         }
         // After `any`: the fallback does not make `tls: {}` a TLS configuration.
-        if generated.ciphers.as_ref().is_none() {
+        if generated.ciphers.is_none() {
             apply_default_ciphers(vm, &mut result);
         }
         Ok(Some(result))
@@ -426,12 +423,12 @@ fn handle_path(
 fn handle_file_for_field(
     global: &JSGlobalObject,
     field: &'static str,
-    file: &jsc::generated::SSLConfigFile,
+    file: &generated::TLSOptionsFile,
 ) -> JsResult<CStrSlice> {
     // A present empty CA list means trust nothing, not use the bundled roots.
     if field == "ca"
-        && let jsc::generated::SSLConfigFile::Array(list) = file
-        && list.items().is_empty()
+        && let generated::TLSOptionsFile::Array(list) = file
+        && list.is_empty()
     {
         return Ok(Some(Vec::new().into_boxed_slice()));
     }
@@ -452,25 +449,23 @@ fn handle_file_for_field(
 
 fn handle_file(
     global: &JSGlobalObject,
-    file: &jsc::generated::SSLConfigFile,
+    file: &generated::TLSOptionsFile,
 ) -> Result<CStrSlice, ReadFromBlobError> {
     let single = handle_single_file(
         global,
         match file {
-            jsc::generated::SSLConfigFile::None => return Ok(None),
-            jsc::generated::SSLConfigFile::String(val) => SingleFile::String(val.as_ref()),
-            jsc::generated::SSLConfigFile::Buffer(val) => {
-                // SAFETY: GenVal::get() yields a non-null pointer valid for the
-                // lifetime of `generated`; we narrow it to `&mut` for the call.
+            generated::TLSOptionsFile::None => return Ok(None),
+            generated::TLSOptionsFile::String(val) => SingleFile::String(val),
+            generated::TLSOptionsFile::Buffer(val) => {
+                // SAFETY: `file` holds a ref on the buffer, and nothing else borrows it here.
                 SingleFile::Buffer(unsafe { &mut *val.get() })
             }
-            jsc::generated::SSLConfigFile::File(val) => {
-                // SAFETY: opaque `GenBlob` (`*mut c_void`) is the JS class `m_ctx`
-                // pointer, layout-identical to `crate::webcore::Blob`.
-                SingleFile::File(unsafe { &mut *val.get().cast::<crate::webcore::Blob>() })
+            generated::TLSOptionsFile::File(val) => {
+                // SAFETY: as above, for the `Blob`.
+                SingleFile::File(unsafe { &mut *val.get() })
             }
-            jsc::generated::SSLConfigFile::Array(list) => {
-                return handle_file_array(global, list.items());
+            generated::TLSOptionsFile::Array(list) => {
+                return handle_file_array(global, list);
             }
         },
     )?;
@@ -481,7 +476,7 @@ fn handle_file(
 
 fn handle_file_array(
     global: &JSGlobalObject,
-    elements: &[jsc::generated::SSLConfigSingleFile],
+    elements: &[generated::TLSOptionsSingleFile],
 ) -> Result<CStrSlice, ReadFromBlobError> {
     if elements.is_empty() {
         return Ok(None);
@@ -499,18 +494,14 @@ fn handle_file_array(
         guard.push(handle_single_file(
             global,
             match elem {
-                jsc::generated::SSLConfigSingleFile::String(val) => {
-                    SingleFile::String(val.as_ref())
-                }
-                jsc::generated::SSLConfigSingleFile::Buffer(val) => {
-                    // SAFETY: see `handle_file` above — non-null GenVal pointers
-                    // valid for the lifetime of `generated`.
+                generated::TLSOptionsSingleFile::String(val) => SingleFile::String(val),
+                generated::TLSOptionsSingleFile::Buffer(val) => {
+                    // SAFETY: see `handle_file`.
                     SingleFile::Buffer(unsafe { &mut *val.get() })
                 }
-                jsc::generated::SSLConfigSingleFile::File(val) => {
-                    // SAFETY: opaque `GenBlob` (`*mut c_void`) is layout-identical
-                    // to `crate::webcore::Blob`.
-                    SingleFile::File(unsafe { &mut *val.get().cast::<crate::webcore::Blob>() })
+                generated::TLSOptionsSingleFile::File(val) => {
+                    // SAFETY: see `handle_file`.
+                    SingleFile::File(unsafe { &mut *val.get() })
                 }
             },
         )?);

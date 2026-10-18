@@ -1241,7 +1241,7 @@ fn persist_pass(background: bool) {
             &job.code,
             &url,
             u32::MAX,
-            true,
+            false,
             None,
         );
         let wrote = blob

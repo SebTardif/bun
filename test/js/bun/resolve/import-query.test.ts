@@ -1253,3 +1253,37 @@ describe.each(["entry.mjs", "entry.cjs"])("entry: %s", entry => {
     expect(exitCode).toBe(0);
   });
 });
+
+test.concurrent.skipIf(isWindows)("file URL referrers preserve encoded directory delimiters", async () => {
+  using dir = tempDir("file-url-referrer-delimiters", {
+    "dir? space%#/child.mjs": "export const value = 'esm';",
+    "dir? space%#/entry.mjs": `
+      import assert from 'node:assert/strict';
+      import { fileURLToPath } from 'node:url';
+      import { value } from './child.mjs';
+      assert.equal(value, 'esm');
+      const child = new URL('./child.mjs', import.meta.url);
+      assert.equal(import.meta.resolve('./child.mjs'), child.href);
+      if (typeof Bun !== 'undefined') {
+        assert.equal(Bun.resolveSync('./child.mjs', new URL('.', import.meta.url).href), fileURLToPath(child));
+      }
+      export default true;
+    `,
+    "driver.mjs": `
+      import assert from 'node:assert/strict';
+      const entry = new URL('./dir%3F%20space%25%23/entry.mjs', import.meta.url);
+      assert.equal((await import(entry.href)).default, true);
+      assert.equal((await import(entry.href + '?v=/other/directory#fragment')).default, true);
+      console.log('ok');
+    `,
+  });
+  await using proc = Bun.spawn({
+    cmd: [bunExe(), "driver.mjs"],
+    cwd: String(dir),
+    env: bunEnv,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+  expect({ stdout, stderr, exitCode }).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+});

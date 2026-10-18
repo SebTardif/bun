@@ -50,14 +50,17 @@ const {
   kOnReadParsed,
   kHandoffResponse,
   kOnHandoffActive,
+  kHasQueuedReads,
   kRealListen,
   tlsSymbol,
   optionsSymbol,
   headerStateSymbol,
   NodeHTTPHeaderState,
   kPendingCallbacks,
+  kRememberPeer,
   kRequest,
   kCloseCallback,
+  kClosedWithUnsentData,
   NodeHTTPResponseFlags,
   callCloseCallback,
   emitCloseNT,
@@ -122,7 +125,7 @@ function traceServerRequestEnd() {
 }
 
 const getBunServerAllClosedPromise = $newRustFunction("node_http_binding.rs", "getBunServerAllClosedPromise", 1);
-const getBunServerOpenCount = $newRustFunction("node_http_binding.rs", "getBunServerOpenCount", 1);
+const getBunServerOpenCount = $bindgen("node_http_binding.bind.ts", "getBunServerOpenCount");
 
 const kServerResponse = Symbol("ServerResponse");
 const kChunkedEncoding = Symbol("kChunkedEncoding");
@@ -912,27 +915,6 @@ Server.prototype[kRealListen] = function (tls, port, host, socketPath, reusePort
       hostname: host,
       unix: socketPath,
       reusePort,
-      // Bindings to be used for WS Server
-      websocket: {
-        open(ws) {
-          ws.data.open(ws);
-        },
-        message(ws, message) {
-          ws.data.message(ws, message);
-        },
-        close(ws, code, reason) {
-          ws.data.close(ws, code, reason);
-        },
-        drain(ws) {
-          ws.data.drain(ws);
-        },
-        ping(ws, data) {
-          ws.data.ping(ws, data);
-        },
-        pong(ws, data) {
-          ws.data.pong(ws, data);
-        },
-      },
       maxRequestBodySize: Number.MAX_SAFE_INTEGER,
 
       onNodeHTTPRequest(
@@ -1026,6 +1008,7 @@ Server.prototype[kRealListen] = function (tls, port, host, socketPath, reusePort
             detachSocketListenersForHandoff(socket);
             // Pass the pipelined data (head buffer) if any was received with the CONNECT request
             const head = connectHead ? connectHead : kEmptyBuffer;
+            socket.bytesRead += head.length;
             // Node.js's parserOnIncoming: req.upgrade is true for CONNECT
             // regardless of shouldUpgradeCallback.
             http_req.upgrade = true;
@@ -1251,6 +1234,7 @@ Server.prototype[kRealListen] = function (tls, port, host, socketPath, reusePort
           socket[kHandoffResponse] = handle;
           socket[kEnableStreaming](true);
           const upgradeHead = !hasBody && connectHead ? connectHead : kEmptyBuffer;
+          socket.bytesRead += upgradeHead.length;
           if (!emitUpgradeHandoff(server, socket, http_req, upgradeHead, hasBody)) return;
           // Like CONNECT: the connection is detached from the HTTP request
           // machinery; hold the native callback open until the raw socket
@@ -1621,7 +1605,12 @@ function replyMissingHostHeader(socket) {
   socket.destroySoon();
 }
 
+// Snapshot of bytesWritten, taken when the socket releases its native handle.
 const kBytesWritten = Symbol("kBytesWritten");
+// Raw socket.write() bytes plus the bytes the current response wrote (its body, or a WebSocket's 101).
+function handleBytesWritten(handle) {
+  return (handle.bytesWritten ?? 0) + (handle.response?.getBytesWritten?.() ?? 0);
+}
 const kEnableStreaming = Symbol("kEnableStreaming");
 // Upgrade request whose body is still being parsed: reading the raw socket also
 // resumes this request, like Node.js's UpgradeStream._read, so an unread body
@@ -1969,6 +1958,7 @@ function getNodeHTTPServerSocket() {
     [kBoundOnAbort] = null;
     [kKeepAliveIdleStart] = undefined;
     [kBytesWritten] = 0;
+    [kClosedWithUnsentData] = undefined;
     [kHandle];
     [kUpgradeIncoming]: import("node:http").IncomingMessage | undefined = undefined;
     [kOnReadParsed] = undefined;
@@ -1986,6 +1976,7 @@ function getNodeHTTPServerSocket() {
     #pendingResponseCallback: ((error?: Error) => void) | null = null;
     #pendingAbortMessage;
     #closeHandled = false;
+    #peer;
     #closingHandle;
     #resetSupported;
     #closeError: Error | undefined = undefined;
@@ -1994,6 +1985,7 @@ function getNodeHTTPServerSocket() {
     declare resetAndClosing: boolean;
     declare _writableState: { emitClose: boolean; decodeStrings: boolean };
     declare _readableState: { emitClose: boolean };
+    declare writableBuffer: { chunk: Buffer }[];
     constructor(server: Server, handle, encrypted, listenerGeneration) {
       // Plain HTTP parser sockets stay half-open for CONNECT/Upgrade tunnels.
       // HTTPS sockets inherit tls.Server's half-open policy instead.
@@ -2039,13 +2031,28 @@ function getNodeHTTPServerSocket() {
 
     get bytesWritten() {
       const handle = this[kHandle];
-      // HTTP response bodies and raw socket writes use separate counters.
-      return handle
-        ? (handle.response?.getBytesWritten?.() ?? 0) + (handle.bytesWritten ?? 0)
-        : (this[kBytesWritten] ?? 0);
+      let bytes = handle ? handleBytesWritten(handle) : this[kBytesWritten];
+      // Like net.Socket, include writes still queued in the Writable.
+      const queued = this.writableBuffer;
+      for (let i = 0; i < queued.length; i++) bytes += queued[i].chunk.length;
+      return bytes;
     }
     set bytesWritten(value) {
       this[kBytesWritten] = value;
+    }
+
+    // Called when an 'upgrade' or 'connect' listener, or `ws` from a 'request' listener, takes the connection over. Its
+    // 'close' listeners run after the handle is gone and still ask who the peer was, and the handle can't answer once the
+    // connection has closed.
+    [kRememberPeer]() {
+      const handle = this[kHandle];
+      if (!handle) return;
+      this.#peer = {
+        remoteAddress: handle.remoteAddress,
+        servername: handle.servername,
+        peerCertVerified: handle.peerCertVerified,
+        authorizationError: handle.authorizationError,
+      };
     }
 
     [kEnableStreaming](enable: boolean) {
@@ -2061,6 +2068,7 @@ function getNodeHTTPServerSocket() {
         if (enable) {
           handle.ondata = this.#onData.bind(this);
           handle.ondrain = this.#onDrain.bind(this);
+          this[kRememberPeer]();
         } else {
           handle.ondata = undefined;
           if (!this.#pendingCallback) handle.ondrain = undefined;
@@ -2074,8 +2082,6 @@ function getNodeHTTPServerSocket() {
       return result;
     }
     #onDrain() {
-      const handle = this[kHandle];
-      this[kBytesWritten] = handle ? (handle.response?.getBytesWritten?.() ?? 0) + (handle.bytesWritten ?? 0) : 0;
       const callback = this.#pendingCallback;
       if (callback) {
         this.#pendingCallback = null;
@@ -2084,9 +2090,12 @@ function getNodeHTTPServerSocket() {
     }
     #onData(chunk, last) {
       this._unrefTimer();
-      // A full buffer stops the reads: https://github.com/nodejs/node/blob/v26.3.0/lib/internal/stream_base_commons.js#L191-L198
-      if (chunk && this.push(chunk) === false && !last) {
-        this[kHandle]?.readStop();
+      if (chunk) {
+        this.bytesRead += chunk.length;
+        // A full buffer stops the reads: https://github.com/nodejs/node/blob/v26.3.0/lib/internal/stream_base_commons.js#L191-L198
+        if (this.push(chunk) === false && !last) {
+          this[kHandle]?.readStop();
+        }
       }
       if (last) {
         const handle = this[kHandle];
@@ -2111,6 +2120,7 @@ function getNodeHTTPServerSocket() {
       }
     }
     #closeHandle(handle, callback, err?: Error) {
+      this[kBytesWritten] = handleBytesWritten(handle);
       this[kHandle] = undefined;
       // Capture the in-flight response before detachSocket() can clear it: a
       // synchronous res.destroy() inside the request handler runs detachSocket()
@@ -2137,6 +2147,8 @@ function getNodeHTTPServerSocket() {
       releaseServerParserShim(this);
       this[kHandle] = null;
       if (closedHandle) {
+        this[kBytesWritten] = handleBytesWritten(closedHandle);
+        this[kClosedWithUnsentData] = closedHandle.closedWithUnsentData;
         // Peer FIN: 'end' before 'close', like Node's net.Socket. read(0) emits it when nothing reads the socket.
         if (closedHandle.peerEnded) {
           this.push(null);
@@ -2275,7 +2287,7 @@ function getNodeHTTPServerSocket() {
     }
 
     address() {
-      return this[kHandle]?.remoteAddress || null;
+      return (this[kHandle] ?? this.#peer)?.remoteAddress || null;
     }
 
     get bufferSize() {
@@ -2403,7 +2415,7 @@ function getNodeHTTPServerSocket() {
     // client sent none (matches Node's server-side TLSSocket.servername).
     get servername() {
       if (!this.encrypted) return undefined;
-      const name = this[kHandle]?.servername;
+      const name = (this[kHandle] ?? this.#peer)?.servername;
       return typeof name === "string" && name.length > 0 ? name : false;
     }
 
@@ -2413,13 +2425,13 @@ function getNodeHTTPServerSocket() {
     get authorized() {
       if (!this.encrypted) return undefined;
       if (!this.server?.[tlsSymbol]?.requestCert) return false;
-      return this[kHandle]?.peerCertVerified === true;
+      return (this[kHandle] ?? this.#peer)?.peerCertVerified === true;
     }
 
     get authorizationError() {
       if (!this.encrypted) return undefined;
       if (!this.server?.[tlsSymbol]?.requestCert) return null;
-      return this[kHandle]?.authorizationError ?? null;
+      return (this[kHandle] ?? this.#peer)?.authorizationError ?? null;
     }
 
     ref() {
@@ -2593,6 +2605,10 @@ function getNodeHTTPServerSocket() {
 
     get [kInternalSocketData]() {
       return this[kHandoffResponse] ?? this[kHandle]?.response;
+    }
+
+    get [kHasQueuedReads]() {
+      return this[kHandle]?.hasQueuedTunnelReads === true;
     }
   } as unknown as typeof import("node:net").Socket;
   // net.Socket's byte-concatenating _writev would discard typed operations.

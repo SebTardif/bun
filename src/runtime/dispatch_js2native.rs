@@ -34,7 +34,6 @@ pub(crate) use bun_install_jsc::npm_jsc::package_manifest_bindings_generate as i
 pub(crate) use bun_install_jsc::ini_jsc::ini_testing_load_npmrc_from_js as ini_ini_ini_testing_ap_is_load_npmrc_from_js;
 pub(crate) use bun_install_jsc::ini_jsc::ini_testing_parse as ini_ini_ini_testing_ap_is_parse;
 
-pub(crate) use bun_jsc::bindgen_test::get_bindgen_test_functions as jsc_bindgen_test_get_bindgen_test_functions;
 pub(crate) use bun_jsc::bytecode_order_recorder::names_for_testing as jsc_bytecode_order_recorder_names_for_testing;
 pub(crate) use bun_jsc::counters::create_counters_object as jsc_counters_create_counters_object;
 pub(crate) use bun_jsc::event_loop::get_active_tasks as jsc_event_loop_get_active_tasks;
@@ -60,32 +59,6 @@ pub(crate) use bun_sys_jsc::error_jsc::TestingAPIs::translate_uv_error_to_e as s
 
 pub(crate) use bun_http_jsc::headers_jsc::h2_live_counts as http_h2_client_testing_ap_is_live_counts;
 pub(crate) use bun_http_jsc::headers_jsc::h3_quic_live_counts as http_h3_client_testing_ap_is_quic_live_counts;
-
-/// This thread's resolved `--use-system-ca` decision (see `VirtualMachine::use_system_ca`);
-/// `undefined` when nothing decided it, in which case tls.ts falls back to NODE_USE_SYSTEM_CA the
-/// way the process default store does:
-/// https://github.com/nodejs/node/blob/v26.3.0/src/node_options.cc#L2207
-pub(crate) fn bun_get_use_system_ca(
-    _global: &JSGlobalObject,
-    _frame: &CallFrame,
-) -> JsResult<JSValue> {
-    Ok(
-        match bun_jsc::virtual_machine::VirtualMachine::get().use_system_ca {
-            Some(v) => JSValue::js_boolean(v),
-            None => JSValue::UNDEFINED,
-        },
-    )
-}
-
-/// Process-wide `--use-openssl-ca`, under which the default store holds neither the bundled nor
-/// the system roots; `getCACertificates('default')` leaves them out to match, as node's does:
-/// https://github.com/nodejs/node/blob/v26.3.0/lib/tls.js#L157
-pub(crate) fn bun_get_use_openssl_ca(
-    _global: &JSGlobalObject,
-    _frame: &CallFrame,
-) -> JsResult<JSValue> {
-    Ok(JSValue::js_boolean(crate::cli::Arguments::use_openssl_ca()))
-}
 
 /// `[elapsedSinceLoopStartMs, idleMs]` for THIS thread's loop — the two numbers
 /// performance.eventLoopUtilization() is defined in terms of (node derives

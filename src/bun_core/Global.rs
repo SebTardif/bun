@@ -879,6 +879,98 @@ unsafe impl Sync for SyncCStr {}
 #[unsafe(no_mangle)]
 static Bun__userAgent: SyncCStr = SyncCStr(concatcp!(user_agent, "\0").as_ptr().cast::<c_char>());
 
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum BunCAStore {
+    Bundled,
+    Openssl,
+    System,
+}
+#[unsafe(no_mangle)]
+static Bun__Node__CAStore: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(BunCAStore::Bundled as u8);
+#[unsafe(no_mangle)]
+pub static Bun__Node__UseSystemCA: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+/// `--no-use-system-ca`: the only thing that beats NODE_USE_SYSTEM_CA. Read by
+/// C++ (root_certs.cpp) so connections restrict trust too, not just the
+/// getCACertificates() reporting path.
+#[unsafe(no_mangle)]
+pub static Bun__Node__NoUseSystemCA: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// `--use-system-ca` was passed (as opposed to NODE_USE_SYSTEM_CA, which also sets
+/// `Bun__Node__UseSystemCA`): only a flag is a per-thread option that workers inherit.
+static Bun__Node__UseSystemCAFlag: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// The main thread's explicit CA intent; `None` leaves NODE_USE_SYSTEM_CA to
+/// decide (per thread, from that thread's env). `--use-bundled-ca`/`--use-openssl-ca`
+/// are deliberately not `Some(false)` — node lets the env var win under those.
+pub fn main_use_system_ca() -> Option<bool> {
+    if Bun__Node__NoUseSystemCA.load(core::sync::atomic::Ordering::Relaxed) {
+        return Some(false);
+    }
+    if Bun__Node__UseSystemCAFlag.load(core::sync::atomic::Ordering::Relaxed) {
+        return Some(true);
+    }
+    None
+}
+
+/// `--use-openssl-ca`: process-wide, as in node. The default store is then OpenSSL's
+/// own lookups instead of the bundled roots (root_certs.cpp), so the reporting path
+/// has to leave the bundled and system sets out as well.
+pub fn use_openssl_ca() -> bool {
+    Bun__Node__CAStore.load(core::sync::atomic::Ordering::Relaxed) == BunCAStore::Openssl as u8
+}
+
+/// Apply CA selection consistently to runtime and package-manager commands.
+pub fn set_ca_store_from_flags(has_flag: impl Fn(&'static [u8]) -> bool) {
+    let no_use_system_ca = has_flag(b"--no-use-system-ca");
+    if no_use_system_ca {
+        Bun__Node__NoUseSystemCA.store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+    let use_system_ca = has_flag(b"--use-system-ca");
+    Bun__Node__UseSystemCAFlag.store(use_system_ca, core::sync::atomic::Ordering::Relaxed);
+    let use_openssl_ca = has_flag(b"--use-openssl-ca");
+    let use_bundled_ca = has_flag(b"--use-bundled-ca");
+
+    // Disallow any combination > 1
+    if (use_system_ca as u8) + (use_openssl_ca as u8) + (use_bundled_ca as u8) > 1 {
+        crate::pretty_errorln!(
+            "<r><red>error<r>: choose exactly one of --use-system-ca, --use-openssl-ca, or --use-bundled-ca"
+        );
+        exit(1);
+    }
+
+    let store: Option<BunCAStore> = if use_bundled_ca {
+        Some(BunCAStore::Bundled)
+    } else if use_openssl_ca {
+        Some(BunCAStore::Openssl)
+    } else if no_use_system_ca {
+        Some(BunCAStore::Bundled)
+    } else if use_system_ca || crate::env_var::NODE_USE_SYSTEM_CA.get().unwrap_or(false) {
+        Some(BunCAStore::System)
+    } else {
+        // No CA flag — leave the FFI default (Bundled) in place. Avoids a
+        // `transmute<u8, BunCAStore>` round-trip through the atomic, which
+        // would be UB on an out-of-range discriminant.
+        None
+    };
+    if let Some(store) = store {
+        Bun__Node__CAStore.store(store as u8, core::sync::atomic::Ordering::Relaxed);
+        // Back-compat boolean used by native code until fully migrated
+        Bun__Node__UseSystemCA.store(
+            store == BunCAStore::System,
+            core::sync::atomic::Ordering::Relaxed,
+        );
+    } else {
+        // `Bun__Node__UseSystemCA` is written unconditionally,
+        // even when no CA flag/env was supplied (default bundled ⇒ false).
+        Bun__Node__UseSystemCA.store(false, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Prevent the linker from dead-code-eliminating `#[no_mangle]` symbols that are
 /// only ever called from C/C++ (so rustc sees no Rust caller). Expands to one
 /// `core::hint::black_box(f as *const ())` per path — purely a side-effect, so
