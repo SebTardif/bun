@@ -5,7 +5,6 @@ const { _ReadableFromWeb: ReadableFromWeb } = require("internal/webstreams_adapt
 
 const ObjectCreate = Object.create;
 const kEmptyObject = ObjectCreate(null);
-const NativeArrayBuffer = ArrayBuffer;
 
 var fetch = Bun.fetch;
 const bindings = $cpp("Undici.cpp", "createUndiciInternalBinding");

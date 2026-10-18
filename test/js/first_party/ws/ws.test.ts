@@ -3,7 +3,7 @@ import { spawn } from "bun";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import crypto from "crypto";
 import { EventEmitter, once } from "events";
-import { bunEnv, bunExe, isDebug, tls as serverIdentity, tempDir, tls as tlsCerts } from "harness";
+import { bunEnv, bunExe, tls as serverIdentity, tempDir, tls as tlsCerts } from "harness";
 import { createServer, request } from "http";
 import https from "https";
 import { HttpsProxyAgent } from "https-proxy-agent";
