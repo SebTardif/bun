@@ -3804,6 +3804,9 @@ impl VirtualMachine {
         // Note: reshaped for borrowck — capture raw ptr before &self call.
         let global = self.global;
         let promise = if let Some(builtin) = builtin {
+            // Built-ins execute directly, outside the module-loader registry. Their
+            // imports already run under the entry point, including Bake's pathless main.
+            self.entry_evaluation_started = true;
             // The built-in module is the main module, so what it imports loads as the imports of a
             // main module do (`has_loaded`): a file of an unknown type is a file, not a script.
             if !self.transpiler.options.disable_transpilation {

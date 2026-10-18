@@ -1232,7 +1232,7 @@ impl UpgradeOptions {
         else {
             return Ok(this);
         };
-        if let Some(headers) = FetchHeaders::cast_(headers_value, global.vm()) {
+        if let Some(headers) = FetchHeaders::cast_as_init(headers_value) {
             this.headers = Some(headers);
             this._headers_object = jsc::EnsureStillAlive(headers_value);
         } else if headers_value.is_object() {
