@@ -4064,8 +4064,9 @@ it.if(isPosix)("realpath reads its path the way Node does", async () => {
     ["w\\d/z", "/w\\d/z", "/w\\d/z"],
     ["w\\d/../file", "/file", "/file"],
     ["a\\..\\file", "ENOENT lstat", "ENOENT realpath"],
-    ["file/", "/file", "ENOTDIR realpath"],
-    ["file/..", "", "ENOTDIR realpath"],
+    // macOS realpath(3), used by Node's native variants, resolves file/ and file/..; glibc reports ENOTDIR.
+    ["file/", "/file", isMacOS ? "/file" : "ENOTDIR realpath"],
+    ["file/..", "", isMacOS ? "" : "ENOTDIR realpath"],
     ["nope/../file", "/file", "ENOENT realpath"],
     ["link/../y", "/y", "/dir/y"],
   ];
