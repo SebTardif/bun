@@ -18,7 +18,7 @@ const {
   validateReadRange,
   validateWriteRange,
 } = require("internal/fs/read-write");
-const normalizeEncoding = $newRustFunction("node_util_binding.rs", "normalizeEncoding", 1);
+const normalizeEncoding = $bindgen("node_util_binding.bind.ts", "normalizeEncoding");
 
 const kEmptyObject = Object.freeze(Object.create(null));
 
@@ -732,7 +732,6 @@ function encodeRealpathResult(result, encoding) {
   return asBuffer.toString(encoding);
 }
 
-let assertEncodingForWindows: any = undefined;
 const realpathSync: typeof import("node:fs").realpathSync =
   process.platform !== "win32"
     ? (fs.realpathSync.bind(fs) as any)
@@ -742,9 +741,7 @@ const realpathSync: typeof import("node:fs").realpathSync =
           if (typeof options === "string") encoding = options;
           else encoding = options?.encoding;
           if (encoding) {
-            (assertEncodingForWindows ?? $newRustFunction("runtime/node/types.rs", "jsAssertEncodingValid", 1))(
-              encoding,
-            );
+            $bindgen("node_util_binding.bind.ts", "assertEncodingValid")(encoding);
           }
         }
         // This function is ported 1:1 from node.js, to emulate how it is unable to
@@ -863,9 +860,7 @@ const realpath: typeof import("node:fs").realpath =
           if (typeof options === "string") encoding = options;
           else encoding = options?.encoding;
           if (encoding) {
-            (assertEncodingForWindows ?? $newRustFunction("runtime/node/types.rs", "jsAssertEncodingValid", 1))(
-              encoding,
-            );
+            $bindgen("node_util_binding.bind.ts", "assertEncodingValid")(encoding);
           }
         }
         if (p instanceof URL) {

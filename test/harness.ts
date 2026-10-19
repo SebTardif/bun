@@ -77,6 +77,9 @@ function detectASAN(): boolean {
 
 export const bunEnv: NodeJS.Dict<string> = {
   ...process.env,
+  // Windows spells PATH `Path`. `{ ...bunEnv, PATH }` would then hold both, and which one a child
+  // process gets depends on the other variables.
+  ...(isWindows && { Path: undefined, PATH: process.env.PATH }),
   // Strip ad-hoc JSC debug options that may be set on CI agents — they leak
   // a "WARNING: failed to parse" line to stderr that breaks snapshot tests.
   JSC_useJIT: undefined,
@@ -1378,6 +1381,13 @@ export function isDockerEnabled(): boolean {
     return false;
   }
 }
+
+/** Can `ensure(service)` from test/docker/index.ts provide this service here? Same order as `ensure()`. */
+export function isDockerServiceEnabled(service: string): boolean {
+  // isDockerEnabled() throws on Linux CI without docker, so it comes last.
+  return !!process.env["BUN_TEST_SERVICE_" + service] || !!process.env.BUN_DOCKER_COORDINATOR || isDockerEnabled();
+}
+
 export async function waitForPort(port: number, timeout: number = 60_000): Promise<void> {
   let deadline = Date.now() + Math.max(1, timeout);
   let error: unknown;
@@ -1462,10 +1472,7 @@ export async function describeWithContainer(
     }
   }
 
-  // Skip only when no env override, no coordinator, and docker is unavailable.
-  // isDockerEnabled() may throw when docker is required but absent, so the
-  // env-override and coordinator checks must short-circuit before it.
-  if (!process.env["BUN_TEST_SERVICE_" + actualService] && !process.env.BUN_DOCKER_COORDINATOR && !isDockerEnabled()) {
+  if (!isDockerServiceEnabled(actualService)) {
     describe.todo(label);
     return;
   }
@@ -1683,21 +1690,24 @@ export function joinP(...paths: string[]) {
  * we need to do case-insensitive stuff within our Bun.spawn implementation
  *
  * Windows has case-insensitive environment variables, so sometimes an
- * object like { Path: "...", PATH: "..." } will be passed. Bun lets
- * the first one win, but we really want the LAST one to win.
+ * object like { Path: "...", PATH: "..." } will be passed. Which one a
+ * child gets depends on the other variables, but we really want the LAST
+ * one to win.
  *
  * This is mostly needed if you want to override env vars, such like:
  *   env: {
- *     ...bunEnv,
+ *     ...env,
  *     PATH: "my path override here",
  *   }
  * becomes
  *   env: mergeWindowEnvs([
- *     bunEnv,
+ *     env,
  *     {
  *       PATH: "my path override here",
  *     },
  *   ])
+ *
+ * bunEnv spells PATH that way on every platform and does not need it for that.
  */
 export function mergeWindowEnvs(envs: Record<string, string | undefined>[]) {
   const keys: Record<string, string | undefined> = {};
@@ -1821,6 +1831,14 @@ export async function pack(cwd: string, env: NodeJS.Dict<string>, ...args: strin
   expect(exitCode).toBe(0);
 
   return { out, err };
+}
+
+/** Writes `<packageDir>/node_modules/.bin/<name>`: a command that prints `says`. */
+export function writeBinCommand(packageDir: string, name: string, says: string) {
+  const bin = join(packageDir, "node_modules", ".bin");
+  fs.mkdirSync(bin, { recursive: true });
+  if (isWindows) fs.writeFileSync(join(bin, `${name}.cmd`), `@echo ${says}\r\n`);
+  else fs.writeFileSync(join(bin, name), `#!/bin/sh\necho ${says}\n`, { mode: 0o755 });
 }
 
 // If you need to modify, clone it

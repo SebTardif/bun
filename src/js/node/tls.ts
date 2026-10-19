@@ -3,9 +3,9 @@ const { isArrayBufferView } = require("node:util/types");
 const net = require("node:net");
 const Duplex = require("internal/streams/duplex");
 const EventEmitter = require("node:events");
-const addServerName = $newRustFunction("Listener.rs", "jsAddServerName", 3);
-const setListenerSecureContext = $newRustFunction("Listener.rs", "jsSetSecureContext", 2);
-const firstFlightBeforeFin = $newRustFunction("runtime/socket/socket.rs", "jsFirstFlightBeforeFin", 1);
+const addServerName = $bindgen("Listener.bind.ts", "addServerName");
+const setListenerSecureContext = $bindgen("Listener.bind.ts", "setSecureContext");
+const firstFlightBeforeFin = $bindgen("socket_body.bind.ts", "firstFlightBeforeFin");
 const { throwNotImplemented } = require("internal/shared");
 const { idnaToASCII } = require("internal/url");
 const {
@@ -1579,8 +1579,8 @@ function cacheBundledRootCertificates(): string[] {
   bundledRootCertificates ||= getBundledRootCertificates() as string[];
   return bundledRootCertificates;
 }
-const getUseSystemCA = $newRustFunction("bun.rs", "getUseSystemCA", 0);
-const getUseOpensslCA = $newRustFunction("bun.rs", "getUseOpensslCA", 0);
+const getUseSystemCA = $bindgen("node_tls_binding.bind.ts", "getUseSystemCA");
+const getUseOpensslCA = $bindgen("node_tls_binding.bind.ts", "getUseOpensslCA");
 
 let defaultCACertificates: string[] | undefined;
 // Mirrors the store root_certs.cpp builds, in node's shape:
