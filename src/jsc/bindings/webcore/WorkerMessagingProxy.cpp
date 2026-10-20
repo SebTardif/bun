@@ -685,7 +685,7 @@ static RefPtr<SerializedWorkerErrorMetadata> serializeWorkerErrorMetadata(Zig::G
                     scope.clearException();
             }
         }
-        metadata->properties = SerializedScriptValue::create(globalObject, propertiesObject, SerializationForStorage::No, SerializationErrorMode::NonThrowing);
+        metadata->properties = SerializedScriptValue::create(globalObject, propertiesObject, SerializationForStorage::No, SerializationErrorMode::NonThrowing, SerializationContext::WorkerError);
     }
     CLEAR_IF_EXCEPTION(scope);
 
@@ -706,7 +706,7 @@ static RefPtr<SerializedWorkerErrorMetadata> serializeWorkerErrorMetadata(Zig::G
     if (cause.isCallable() || cause.isSymbol())
         return metadata;
 
-    metadata->cause = SerializedScriptValue::create(globalObject, cause, SerializationForStorage::No, SerializationErrorMode::NonThrowing);
+    metadata->cause = SerializedScriptValue::create(globalObject, cause, SerializationForStorage::No, SerializationErrorMode::NonThrowing, SerializationContext::WorkerError);
     CLEAR_IF_EXCEPTION(scope);
     if (!metadata->cause)
         return metadata;
@@ -776,7 +776,7 @@ bool WorkerMessagingProxy::postSerializedErrorToWorkerObject(Zig::GlobalObject& 
     auto& vm = JSC::getVM(&workerGlobalObject);
     auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
 
-    auto serialized = SerializedScriptValue::create(workerGlobalObject, value, SerializationForStorage::No, SerializationErrorMode::NonThrowing);
+    auto serialized = SerializedScriptValue::create(workerGlobalObject, value, SerializationForStorage::No, SerializationErrorMode::NonThrowing, SerializationContext::WorkerError);
     CLEAR_IF_EXCEPTION(scope);
     // Cloning an Error reads `stack`; when that getter throws (a throwing Error.prepareStackTrace),
     // Node drops only `stack` (lib/internal/error_serdes.js TryGetAllProperties) rather than the
@@ -790,7 +790,7 @@ bool WorkerMessagingProxy::postSerializedErrorToWorkerObject(Zig::GlobalObject& 
             CLEAR_IF_EXCEPTION(scope);
             errorInstance->putDirect(vm, vm.propertyNames->stack, JSC::jsUndefined(), static_cast<unsigned>(JSC::PropertyAttribute::DontEnum));
             if (!vm.hasPendingTerminationException())
-                serialized = SerializedScriptValue::create(workerGlobalObject, value, SerializationForStorage::No, SerializationErrorMode::NonThrowing);
+                serialized = SerializedScriptValue::create(workerGlobalObject, value, SerializationForStorage::No, SerializationErrorMode::NonThrowing, SerializationContext::WorkerError);
             CLEAR_IF_EXCEPTION(scope);
         }
     }
@@ -801,9 +801,8 @@ bool WorkerMessagingProxy::postSerializedErrorToWorkerObject(Zig::GlobalObject& 
     // preserves a string `error.code` (lib/internal/error_serdes.js).
     String errorCode = errorCodeOf(workerGlobalObject, value);
 
-    // Node's worker error serializer preserves an Error's own enumerable metadata and recursively
-    // serializes `cause`. The ordinary structured-clone Error path intentionally keeps only
-    // standard Error fields, so carry these worker-only additions separately.
+    // WorkerError omits causes from the general clone so this bounded, best-effort
+    // metadata owner alone handles them, including uncloneable causes and enumerable fields.
     RefPtr<SerializedWorkerErrorMetadata> serializedMetadata;
     if (auto* errorInstance = dynamicDowncast<JSC::ErrorInstance>(value)) {
         HashSet<JSC::JSObject*> seen;

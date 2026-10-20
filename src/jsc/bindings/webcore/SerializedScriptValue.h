@@ -88,7 +88,9 @@ enum class SerializationErrorMode { NonThrowing,
     Throwing };
 enum class SerializationContext { Default,
     WorkerPostMessage,
-    WindowPostMessage };
+    WindowPostMessage,
+    WorkerError,
+    LegacyIPC };
 enum class SerializationForStorage : bool { No,
     Yes };
 enum class SerializationForCrossProcessTransfer : bool { No,
@@ -117,6 +119,9 @@ public:
     WEBCORE_EXPORT static RefPtr<SerializedScriptValue> create(JSC::JSGlobalObject&, JSC::JSValue, SerializationForStorage = SerializationForStorage::No, SerializationErrorMode = SerializationErrorMode::Throwing, SerializationContext = SerializationContext::Default, SerializationForCrossProcessTransfer = SerializationForCrossProcessTransfer::No);
 
     static RefPtr<SerializedScriptValue> convert(JSC::JSGlobalObject& globalObject, JSC::JSValue value) { return create(globalObject, value, SerializationForStorage::Yes); }
+
+    // Node transports retain Buffer identities from the actual serialization walk.
+    WEBCORE_EXPORT static ExceptionOr<Ref<SerializedScriptValue>> createForNode(JSC::JSGlobalObject&, JSC::JSValue, SerializationForStorage, SerializationForCrossProcessTransfer, bool& hasBufferEnvelope, SerializationContext = SerializationContext::Default);
 
     // Fast path for postMessage with pure strings
     static Ref<SerializedScriptValue> createStringFastPath(const String& string);
@@ -153,7 +158,7 @@ public:
     WEBCORE_EXPORT ~SerializedScriptValue();
 
 private:
-    static ExceptionOr<Ref<SerializedScriptValue>> create(JSC::JSGlobalObject&, JSC::JSValue, Vector<JSC::Strong<JSC::JSObject>>&& transfer, Vector<RefPtr<MessagePort>>&, SerializationForStorage, SerializationErrorMode, SerializationContext, SerializationForCrossProcessTransfer);
+    static ExceptionOr<Ref<SerializedScriptValue>> create(JSC::JSGlobalObject&, JSC::JSValue, Vector<JSC::Strong<JSC::JSObject>>&& transfer, Vector<RefPtr<MessagePort>>&, SerializationForStorage, SerializationErrorMode, SerializationContext, SerializationForCrossProcessTransfer, bool* hasBufferEnvelope = nullptr, JSC::JSArray* legacyNodeBuffers = nullptr);
     WEBCORE_EXPORT SerializedScriptValue(Vector<unsigned char>&&, std::unique_ptr<ArrayBufferContentsArray>&& = nullptr);
 
     SerializedScriptValue(Vector<unsigned char>&&, std::unique_ptr<ArrayBufferContentsArray>, std::unique_ptr<ArrayBufferContentsArray> sharedBuffers
