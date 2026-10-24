@@ -804,7 +804,9 @@ pub(crate) fn end_transport(_cx: &mut JsScope<'_>, owner: JsLocal<'_>) {
         let socket = unsafe { &*socket.as_ptr() };
         if let bun_uws::InternalSocket::UpgradedDuplex(duplex) = socket.socket.get().socket {
             // SAFETY: this live handle was installed by DuplexUpgradeContext::duplex_socket.
-            unsafe { &*duplex.cast::<UpgradedDuplex>() }.call_write_or_end(None, false);
+            let duplex = unsafe { &*duplex.cast::<UpgradedDuplex>() };
+            let _keep_alive = duplex.keep_alive();
+            duplex.call_write_or_end(None, false);
         }
     }
 }

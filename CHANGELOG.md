@@ -6,6 +6,10 @@
 
 - Preserve the relative tail when `path.win32.resolve()` falls back to a different drive's root.
 
+- Avoid a panic when `bun create` selects a certificate store.
+
+- Keep a TLS socket's native context alive while delayed transport shutdown re-enters the event loop.
+
 - Back out Error.cause serialization (#192, #194) pending a performance-neutral design.
 
 - Avoid an extra payload copy when structured cloning or messaging a Buffer or ArrayBuffer inside a container, without changing serialized bytes.

@@ -127,12 +127,21 @@ const callbacks = {
     },
   },
   waits: {
-    // destroy() in a later turn. The engine ends a transport that is still open, and that runs final().
+    // Graceful shutdown enters final(); destroy() then runs inside its event-loop turn.
     "the transport's final(), destroy() in a later turn": c => {
       c.serverSide.destroy = () => c.serverSide;
-      c.serverSide.onFinal = () => c.closeThenTurn(null);
       const server = wrap(c.serverSide);
-      const client = connect(c.clientSide).on("secureConnect", () => setImmediate(() => server.destroy()));
+      c.serverSide.onFinal = () => {
+        queueMicrotask(() => server.destroy());
+        c.closeThenTurn(null);
+      };
+      const client = connect(c.clientSide).on("secureConnect", () =>
+        setImmediate(() => {
+          // Keep the peer open instead of forwarding the close_notify flight.
+          c.serverSide.cut = true;
+          server.end();
+        }),
+      );
       return [server, client];
     },
     // The close lands inside the turn, from a microtask.

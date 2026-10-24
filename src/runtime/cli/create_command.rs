@@ -152,6 +152,9 @@ impl CreateOptions {
                 "--use-system-ca                Use the system's trusted certificate authorities"
             ),
             clap::param!(
+                "--no-use-system-ca             Do not use system CAs, overriding $NODE_USE_SYSTEM_CA"
+            ),
+            clap::param!(
                 "--use-openssl-ca               Use OpenSSL's default CA store instead of the bundled one"
             ),
             clap::param!("--use-bundled-ca               Use bundled CA store"),
