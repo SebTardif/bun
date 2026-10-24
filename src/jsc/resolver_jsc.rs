@@ -10,20 +10,15 @@ use bun_paths::resolve_path;
 use bun_paths::{Platform, SEP, SEP_STR};
 
 #[derive(Clone, Copy)]
-struct NodeModulePathOptions {
-    use_dirname: bool,
-    split_query: bool,
+enum NodeModulePathBase {
+    Directory,
+    FilePath,
+    ModuleKey,
 }
 
 pub(crate) fn node_module_paths(path: &BunString) -> Vec<BunString> {
     crate::mark_binding!();
-    node_module_paths_list(
-        path,
-        NodeModulePathOptions {
-            use_dirname: false,
-            split_query: false,
-        },
-    )
+    node_module_paths_list(path, NodeModulePathBase::Directory)
 }
 
 #[unsafe(no_mangle)]
@@ -61,31 +56,27 @@ extern "C" fn node_module_paths_js_value(
     use_dirname: bool,
     split_query: bool,
 ) -> JSValue {
-    crate::bun_string_jsc::to_js_array(
-        global,
-        &node_module_paths_list(
-            in_str,
-            NodeModulePathOptions {
-                use_dirname,
-                split_query,
-            },
-        ),
-    )
-    .or_pending_exception()
+    let base = match (use_dirname, split_query) {
+        (false, _) => NodeModulePathBase::Directory,
+        (true, false) => NodeModulePathBase::FilePath,
+        (true, true) => NodeModulePathBase::ModuleKey,
+    };
+    crate::bun_string_jsc::to_js_array(global, &node_module_paths_list(in_str, base))
+        .or_pending_exception()
 }
 
-fn node_module_paths_list(in_str: &BunString, options: NodeModulePathOptions) -> Vec<BunString> {
+fn node_module_paths_list(in_str: &BunString, base: NodeModulePathBase) -> Vec<BunString> {
     let mut list: Vec<bun_core::String> = Vec::new();
 
     let utf8 = in_str.to_utf8();
-    let base_path: &[u8] = if options.use_dirname {
-        resolve_path::dirname::<bun_paths::platform::Auto>(if options.split_query {
-            module_key_without_query(utf8.slice())
-        } else {
-            utf8.slice()
-        })
-    } else {
-        utf8.slice()
+    let base_path: &[u8] = match base {
+        NodeModulePathBase::Directory => utf8.slice(),
+        NodeModulePathBase::FilePath => {
+            resolve_path::dirname::<bun_paths::platform::Auto>(utf8.slice())
+        }
+        NodeModulePathBase::ModuleKey => resolve_path::dirname::<bun_paths::platform::Auto>(
+            module_key_without_query(utf8.slice()),
+        ),
     };
     // Like Node's `_nodeModulePaths`, this is pure string manipulation, so there's no length limit.
     let mut full_path: &[u8] = resolve_path::join_abs_string::<bun_paths::platform::Auto>(
