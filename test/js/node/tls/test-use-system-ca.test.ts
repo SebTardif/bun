@@ -202,17 +202,14 @@ describe("--use-system-ca", () => {
     [["--no-use-system-ca"], "bundled"],
     [["--use-openssl-ca"], "none"],
     [["--use-system-ca"], "bundled+system"],
-    [[], "bundled", "--use-system-ca --no-use-system-ca"],
-  ])(
-    "getCACertificates('default') with flags %j reports %s (NODE_OPTIONS=%s)",
-    async (flags, expected, nodeOptions) => {
-      using dir = tempDir("ca-report", { system: { "cert.pem": tls.cert } });
-      await using proc = spawn({
-        cmd: [
-          bunExe(),
-          ...flags,
-          "-e",
-          `
+  ])("getCACertificates('default') with flags %j reports %s", async (flags, expected) => {
+    using dir = tempDir("ca-report", { system: { "cert.pem": tls.cert } });
+    await using proc = spawn({
+      cmd: [
+        bunExe(),
+        ...flags,
+        "-e",
+        `
         const tls = require("tls");
         console.log(JSON.stringify({
           def: tls.getCACertificates("default").length,
@@ -220,27 +217,25 @@ describe("--use-system-ca", () => {
           system: tls.getCACertificates("system").length,
         }));
         `,
-        ],
-        cwd: String(dir),
-        env: {
-          ...bunEnv,
-          SSL_CERT_FILE: "",
-          SSL_CERT_DIR: join(String(dir), "system"),
-          NODE_USE_SYSTEM_CA: undefined,
-          NODE_EXTRA_CA_CERTS: undefined,
-          NODE_OPTIONS: nodeOptions,
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
-      expect(stderr).toBe("");
-      const { def, bundled, system } = JSON.parse(stdout);
-      expect(bundled).toBeGreaterThan(0);
-      expect(def).toBe({ none: 0, bundled, "bundled+system": bundled + system }[expected]);
-      expect(exitCode).toBe(0);
-    },
-  );
+      ],
+      cwd: String(dir),
+      env: {
+        ...bunEnv,
+        SSL_CERT_FILE: "",
+        SSL_CERT_DIR: join(String(dir), "system"),
+        NODE_USE_SYSTEM_CA: undefined,
+        NODE_EXTRA_CA_CERTS: undefined,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect(stderr).toBe("");
+    const { def, bundled, system } = JSON.parse(stdout);
+    expect(bundled).toBeGreaterThan(0);
+    expect(def).toBe({ none: 0, bundled, "bundled+system": bundled + system }[expected]);
+    expect(exitCode).toBe(0);
+  });
 
   // Clients that fall back to the thread's default client context (WebSocket has no per-connection
   // CA option) must follow the worker's --use-system-ca exactly like tls.connect and fetch do.

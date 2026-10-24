@@ -4,7 +4,7 @@
 
 - Sync oven-sh/bun through `a8fcd319be58ad4d284330b86602cfb3c8e49c83`, including native-binding schema migration, source-position updates, and runtime hardening while retaining fork compatibility and source-sharing fixes.
 
-- Honor `--no-use-system-ca` in `NODE_OPTIONS` and preserve the relative tail when `path.win32.resolve()` falls back to a different drive's root.
+- Preserve the relative tail when `path.win32.resolve()` falls back to a different drive's root.
 
 - Back out Error.cause serialization (#192, #194) pending a performance-neutral design.
 
