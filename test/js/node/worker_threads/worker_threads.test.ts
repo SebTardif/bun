@@ -4679,12 +4679,9 @@ describe("resourceLimits", () => {
           const victim = { payload: new Array(10000).fill(7) };
           registry.register(victim, 1);
         })();
-        // Let the registering frame leave the conservative stack before requesting collection.
-        setImmediate(() => {
-          Bun.gc(false);
-          // The allocation slow path starts the request before this callback parks.
-          globalThis.kick = new Array(32768).fill(7);
-        });
+        Bun.gc(false);
+        // The allocation slow path starts the request before this callback parks.
+        globalThis.kick = new Array(32768).fill(7);
       `,
       {
         BUN_GC_TIMER_DISABLE: "1",
