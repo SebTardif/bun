@@ -533,6 +533,7 @@ static SPLICED: &[SplicedFlag] = &[
     SplicedFlag { names: &[b"--expose-gc"], canonical: b"--expose-gc", kind: Supported::Flag },
     SplicedFlag { names: &[b"--no-addons"], canonical: b"--no-addons", kind: Supported::Flag },
     SplicedFlag { names: &[b"--no-deprecation"], canonical: b"--no-deprecation", kind: Supported::Flag },
+    SplicedFlag { names: &[b"--no-use-system-ca"], canonical: b"--no-use-system-ca", kind: Supported::Flag },
     SplicedFlag { names: &[b"--no-warnings"], canonical: b"--no-warnings", kind: Supported::Flag },
     SplicedFlag { names: &[b"--pending-deprecation"], canonical: b"--pending-deprecation", kind: Supported::Flag },
     SplicedFlag { names: &[b"--preserve-symlinks"], canonical: b"--preserve-symlinks", kind: Supported::Flag },
@@ -769,6 +770,14 @@ mod tests {
         assert!(toks(b"--bun --smol").is_empty());
         // The value of a dropped flag in space form falls out as a positional.
         assert!(toks(b"--max-semi-space-size 16").is_empty());
+    }
+
+    #[test]
+    fn filter_preserves_system_ca_exclusion() {
+        assert_eq!(
+            toks(b"--use-system-ca --no-use-system-ca"),
+            vec![b"--use-system-ca".to_vec(), b"--no-use-system-ca".to_vec()],
+        );
     }
 
     #[test]
