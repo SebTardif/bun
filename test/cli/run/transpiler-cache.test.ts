@@ -1091,10 +1091,12 @@ try {
     expect(result.exitCode).toBe(0);
   }
 
-  test("isn't written when source maps are disabled", () => {
+  test("retains an explicitly map-free entry and rewrites it when maps are enabled", () => {
     writeThrowingModule();
     const first = run({ BUN_FEATURE_FLAG_DISABLE_SOURCE_MAPS: "1" });
-    expect(cacheEntries()).toEqual([]);
+    const entries = cacheEntries();
+    expect(entries).toHaveLength(1);
+    expect(readFileSync(join(cache_dir, entries[0])).readBigUInt64LE(SOURCEMAP_BYTE_LENGTH_AT)).toBe(0n);
     expect(first.exitCode).toBe(0);
     expectRemappedFrameAndStoredSourceMap(run());
   });
