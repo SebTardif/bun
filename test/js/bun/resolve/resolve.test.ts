@@ -1427,9 +1427,9 @@ describe("package.json exports targets nested too deeply", () => {
     });
     const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
 
-    // The target resolves if the stack is large enough.
+    // The fork's package reader rejects targets beyond its parsing depth limit.
     expect({ stdout, stderr, exitCode }).toEqual({
-      stdout: expect.stringMatching(/^(caught MODULE_NOT_FOUND|resolved)\n$/),
+      stdout: "caught ERR_INVALID_PACKAGE_CONFIG\n",
       stderr: "",
       exitCode: 0,
     });

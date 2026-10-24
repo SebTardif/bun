@@ -166,8 +166,8 @@ test.concurrent.each([
         "not found: a-package-the-registry-does-not-have",
       ],
       stderr: "",
-      // Auto-install is on: it asks for the one name that can be a package.
-      asked: ["/a-package-the-registry-does-not-have"],
+      // The fork defaults auto-install off; explicit opt-in asks only for a valid package.
+      asked: flags.length ? ["/a-package-the-registry-does-not-have"] : [],
       exitCode: 0,
     });
   },

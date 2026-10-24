@@ -10,6 +10,10 @@
 
 - Keep a TLS socket's native context alive while delayed transport shutdown re-enters the event loop.
 
+- Preserve reusable transpiler-cache entries when source maps are explicitly disabled.
+
+- Preserve custom Headers iterators when `server.fetch()` copies request headers.
+
 - Back out Error.cause serialization (#192, #194) pending a performance-neutral design.
 
 - Avoid an extra payload copy when structured cloning or messaging a Buffer or ArrayBuffer inside a container, without changing serialized bytes.

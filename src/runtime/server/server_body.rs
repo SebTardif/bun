@@ -2090,7 +2090,7 @@ where
                 }
 
                 if let Some(headers_) = init.fast_get(global, jsc::BuiltinName::Headers)? {
-                    if let Some(headers__) = FetchHeaders::cast_(headers_, global.vm()) {
+                    if let Some(headers__) = FetchHeaders::cast_as_init(headers_) {
                         // Copy the headers like `new Request(url, { headers })` does.
                         // S008: `FetchHeaders` is an opaque ZST FFI handle — safe deref.
                         headers = bun_opaque::opaque_deref_mut(headers__.as_ptr())

@@ -2061,7 +2061,7 @@ test.concurrent("bun add reports a duplicate workspace name at its position in t
   }).toEqual({ error: "1:9", note: "5:11", exitCode: 1 });
 });
 
-// Auto-install reads the project from the folder of the script, not from the root.
+// Explicit auto-install reads the project from the folder of the script, not from the root.
 test.concurrent("a script that imports a missing package reports two workspaces with the same name", async () => {
   using ctx = await setupTest();
   const { packageDir, packageJson, env } = ctx;
@@ -2073,7 +2073,7 @@ test.concurrent("a script that imports a missing package reports two workspaces 
     write(join(packageDir, "packages", "two", "package.json"), JSON.stringify({ name: "same" })),
   ]);
   await using proc = spawn({
-    cmd: [bunExe(), "index.ts"],
+    cmd: [bunExe(), "--install=force", "index.ts"],
     cwd: join(packageDir, "packages", "app"),
     stdout: "pipe",
     stderr: "pipe",

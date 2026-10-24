@@ -900,9 +900,11 @@ std::optional<String> BunPlugin::OnLoad::resolveVirtualModule(const String& path
             auto url = WTF::URL::fileURLWithFileSystemPath(from);
             ASSERT(url.isValid());
             joinedPath = Bun::moduleKeyFromFileURL(URL(url, path));
+            if (joinedPath.isNull())
+                joinedPath = Bun::moduleKeyFromFileURL(URL(url, makeStringByReplacingAll(path, "%"_s, "%25"_s)));
         }
 
-        return virtualModules->contains(joinedPath) ? std::optional<String> { joinedPath } : std::nullopt;
+        return !joinedPath.isNull() && virtualModules->contains(joinedPath) ? std::optional<String> { joinedPath } : std::nullopt;
     }
 
     return virtualModules->contains(path) ? std::optional<String> { path } : std::nullopt;

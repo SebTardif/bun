@@ -1010,8 +1010,11 @@ bun_ast::link_impl_TranspilerCacheImpl! {
             if this.input_hash.is_none() || IS_DISABLED.load(Ordering::Relaxed) {
                 return;
             }
-            // `Entry::load` rejects an entry with no sourcemap.
-            if sourcemap.is_empty() {
+            // Map-free entries are reusable only when maps were explicitly disabled.
+            if sourcemap.is_empty()
+                && !env_var::feature_flag::BUN_FEATURE_FLAG_DISABLE_SOURCE_MAPS::get()
+                    .unwrap_or(false)
+            {
                 return;
             }
             debug_assert!(this.entry.is_none());

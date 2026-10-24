@@ -581,16 +581,21 @@ test.concurrent("mock.module() of a module whose import() is still loading its d
 });
 
 // In a URL, the "%de" in "50%deposit.ts" escapes the byte 0xDE, which isn't valid UTF-8. Windows decodes it to U+FFFD.
-test.concurrent.skipIf(isWindows)("supports module names with a % that isn't a valid UTF-8 escape", async () => {
+test.concurrent.skipIf(isWindows)("supports percent-encoded module names and rejects invalid UTF-8 escapes", async () => {
   using dir = tempDir("mock-module-percent", {
     "real%deposit.ts": `export default "the real file";`,
     "percent.test.ts": `
       import { expect, mock, test } from "bun:test";
 
       test("mocks a relative name that doesn't resolve", async () => {
-        mock.module("./50%deposit.ts", () => ({ default: "the mock" }));
-        expect((await import("./50%deposit.ts")).default).toBe("the mock");
+        mock.module("./50%25deposit.ts", () => ({ default: "the mock" }));
+        expect((await import("./50%25deposit.ts")).default).toBe("the mock");
         expect(require("./50%deposit.ts").default).toBe("the mock");
+      });
+
+      test("rejects malformed relative URL escapes", async () => {
+        expect(() => mock.module("./invalid%deposit.ts", () => ({}))).toThrow(new URIError("URI malformed"));
+        await expect(import("./real%deposit.ts")).rejects.toThrow(new URIError("URI malformed"));
       });
 
       test("mock.module() of a file: URL throws", () => {
@@ -598,7 +603,7 @@ test.concurrent.skipIf(isWindows)("supports module names with a % that isn't a v
       });
 
       test("loads a real file with a % in its name", async () => {
-        expect((await import("./real%deposit.ts")).default).toBe("the real file");
+        expect((await import("./real%25deposit.ts")).default).toBe("the real file");
       });
 
       test("import() of a file: URL rejects", async () => {
@@ -614,6 +619,6 @@ test.concurrent.skipIf(isWindows)("supports module names with a % that isn't a v
     stderr: "pipe",
   });
   const [, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
-  expect(stderr).toContain(" 4 pass\n 0 fail");
+  expect(stderr).toContain(" 5 pass\n 0 fail");
   expect(exitCode).toBe(0);
 });
