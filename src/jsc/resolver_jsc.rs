@@ -9,6 +9,7 @@ use bun_core::{String as BunString, strings};
 use bun_paths::resolve_path;
 use bun_paths::{Platform, SEP, SEP_STR};
 
+#[derive(Clone, Copy)]
 struct NodeModulePathOptions {
     use_dirname: bool,
     split_query: bool,
