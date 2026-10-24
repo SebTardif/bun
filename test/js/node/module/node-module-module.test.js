@@ -1318,7 +1318,8 @@ console.log("survived", require("./late.js"));`,
     expect(stderr).toBe("");
     const root = path.resolve("/").length;
     expect(JSON.parse(stdout)).toEqual({
-      createRequire: "ERR_INVALID_PACKAGE_CONFIG",
+      // Windows rejects the rooted path before probing package metadata.
+      createRequire: isWindows ? "MODULE_NOT_FOUND" : "ERR_INVALID_PACKAGE_CONFIG",
       nodeModulePaths: [root + 100_000 + "/node_modules".length, root + "node_modules".length],
       enableCompileCache: "Cannot create cache directory: path too long",
     });
