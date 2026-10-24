@@ -10,8 +10,8 @@ import {
   isMacOS,
   isMusl,
   isWindows,
-  noCoreCmd,
   mergeWindowEnvs,
+  noCoreCmd,
   nodeExeMatchingAbi,
   tempDir,
 } from "harness";

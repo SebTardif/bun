@@ -16,4 +16,8 @@ export const onEnd = b.fn({ ...listener, export: "Bun__UpgradedDuplex__onEnd" })
 export const onWritable = b.fn({ ...listener, export: "Bun__UpgradedDuplex__onWritable" });
 export const onCloseJS = b.fn({ ...listener, export: "Bun__UpgradedDuplex__onCloseJS" });
 
-export const endTransport = b.fn({ export: "Bun__UpgradedDuplex__endTransport", args: { owner: b.any }, capability: "js" });
+export const endTransport = b.fn({
+  export: "Bun__UpgradedDuplex__endTransport",
+  args: { owner: b.any },
+  capability: "js",
+});

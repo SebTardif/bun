@@ -27,7 +27,14 @@ function server(name: string) {
       "wsPackageHandlers",
     ],
     proto: {
-      _setNodeHTTPSSecureContext: { args: { options: b.any, additionalCA: b.any }, returns: b.any, capability: "js", throws: true, requiredArguments: 1, rustName: "set_node_https_secure_context" },
+      _setNodeHTTPSSecureContext: {
+        args: { options: b.any, additionalCA: b.any },
+        returns: b.any,
+        capability: "js",
+        throws: true,
+        requiredArguments: 1,
+        rustName: "set_node_https_secure_context",
+      },
       address: { getter: b.any, cache: true, capability: "js", throws: true },
       closeIdleConnections: { returns: b.usize, capability: "js" },
       development: { getter: b.bool },

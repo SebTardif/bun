@@ -11,7 +11,6 @@ import {
   isLinux,
   isWindows,
   nodeExe,
-  nodeExeAtLeast,
   rejectUnauthorizedScope,
   runtimesWithNode,
   tempDir,

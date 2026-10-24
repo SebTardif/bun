@@ -1,6 +1,6 @@
 import { listen, serve, spawn } from "bun";
 import { describe, expect, test } from "bun:test";
-import { bunEnv, bunExe, isLinux, isWindows, tls, tls as localhost, tempDir } from "harness";
+import { bunEnv, bunExe, isLinux, isWindows, tls as localhost, tempDir, tls } from "harness";
 import { mkfifo } from "mkfifo";
 import { X509Certificate } from "node:crypto";
 import { closeSync, constants, existsSync, openSync, readFileSync, symlinkSync, writeSync } from "node:fs";

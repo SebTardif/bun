@@ -271,43 +271,46 @@ describe.skipIf(!isDebug && !isASAN)("work that comes back after its worker bega
 });
 
 const cc = isWindows ? null : process.env.CC || Bun.which("cc") || Bun.which("gcc") || Bun.which("clang");
-test.concurrent.skipIf(!cc)("napi_queue_async_work from environment cleanup is drained before a worker exits", async () => {
-  using dir = tempDir("worker-late-napi", {});
-  const addon = path.join(String(dir), "addon.node");
-  await using build = Bun.spawn({
-    cmd: [
-      cc!,
-      "-shared",
-      "-fPIC",
-      ...(isMacOS ? ["-undefined", "dynamic_lookup"] : []),
-      `-I${path.resolve(import.meta.dir, "../../../../src/runtime/napi")}`,
-      path.join(import.meta.dir, "worker-late-completion-napi-fixture.c"),
-      "-o",
-      addon,
-    ],
-    env: bunEnv,
-    stderr: "inherit",
-  });
-  expect(await build.exited).toBe(0);
-  // The fork finalizes reachable externals during environment cleanup, before the VM closes.
-  await using proc = Bun.spawn({
-    cmd: [
-      bunExe(),
-      "-e",
-      `new (require("node:worker_threads").Worker)(
+test.concurrent.skipIf(!cc)(
+  "napi_queue_async_work from environment cleanup is drained before a worker exits",
+  async () => {
+    using dir = tempDir("worker-late-napi", {});
+    const addon = path.join(String(dir), "addon.node");
+    await using build = Bun.spawn({
+      cmd: [
+        cc!,
+        "-shared",
+        "-fPIC",
+        ...(isMacOS ? ["-undefined", "dynamic_lookup"] : []),
+        `-I${path.resolve(import.meta.dir, "../../../../src/runtime/napi")}`,
+        path.join(import.meta.dir, "worker-late-completion-napi-fixture.c"),
+        "-o",
+        addon,
+      ],
+      env: bunEnv,
+      stderr: "inherit",
+    });
+    expect(await build.exited).toBe(0);
+    // The fork finalizes reachable externals during environment cleanup, before the VM closes.
+    await using proc = Bun.spawn({
+      cmd: [
+        bunExe(),
+        "-e",
+        `new (require("node:worker_threads").Worker)(
         "globalThis.keep = require(" + JSON.stringify(process.argv[1]) + ").queueFromFinalizer();",
         { eval: true },
       );`,
-      addon,
-    ],
-    env: bunEnv,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
-  // Work is still accepted during native cleanup and must be drained before VM destruction.
-  expect({ stdout, stderr, exitCode }).toEqual({ stdout: "queued from finalizer: 0\n", stderr: "", exitCode: 0 });
-});
+        addon,
+      ],
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    // Work is still accepted during native cleanup and must be drained before VM destruction.
+    expect({ stdout, stderr, exitCode }).toEqual({ stdout: "queued from finalizer: 0\n", stderr: "", exitCode: 0 });
+  },
+);
 
 // A `Bun.file()` / `Bun.stdin` read of a pipe or tty that has no data yet
 // parks on the io loop instead of blocking a pool thread, so terminate() can

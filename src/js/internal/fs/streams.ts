@@ -746,10 +746,7 @@ function writableFromFileSink(fileSink: any) {
 }
 
 function destroyFileSink(this: FSStream, err: Error | null, cb: (err?: Error | null) => void) {
-  if (
-    this.writableFinished ||
-    !$bindgen("FileSink.bind.ts", "cancel")(this[kWriteStreamFastPath])
-  ) {
+  if (this.writableFinished || !$bindgen("FileSink.bind.ts", "cancel")(this[kWriteStreamFastPath])) {
     close(this, err, cb);
     return;
   }

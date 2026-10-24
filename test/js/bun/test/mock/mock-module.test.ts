@@ -581,10 +581,12 @@ test.concurrent("mock.module() of a module whose import() is still loading its d
 });
 
 // In a URL, the "%de" in "50%deposit.ts" escapes the byte 0xDE, which isn't valid UTF-8. Windows decodes it to U+FFFD.
-test.concurrent.skipIf(isWindows)("supports percent-encoded module names and rejects invalid UTF-8 escapes", async () => {
-  using dir = tempDir("mock-module-percent", {
-    "real%deposit.ts": `export default "the real file";`,
-    "percent.test.ts": `
+test.concurrent.skipIf(isWindows)(
+  "supports percent-encoded module names and rejects invalid UTF-8 escapes",
+  async () => {
+    using dir = tempDir("mock-module-percent", {
+      "real%deposit.ts": `export default "the real file";`,
+      "percent.test.ts": `
       import { expect, mock, test } from "bun:test";
 
       test("mocks a relative name that doesn't resolve", async () => {
@@ -610,15 +612,16 @@ test.concurrent.skipIf(isWindows)("supports percent-encoded module names and rej
         await expect(import("file:///50%deposit.ts")).rejects.toThrow("Cannot find module");
       });
     `,
-  });
-  await using proc = Bun.spawn({
-    cmd: [bunExe(), "test", "./percent.test.ts"],
-    cwd: String(dir),
-    env: bunEnv,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
-  expect(stderr).toContain(" 5 pass\n 0 fail");
-  expect(exitCode).toBe(0);
-});
+    });
+    await using proc = Bun.spawn({
+      cmd: [bunExe(), "test", "./percent.test.ts"],
+      cwd: String(dir),
+      env: bunEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+    expect(stderr).toContain(" 5 pass\n 0 fail");
+    expect(exitCode).toBe(0);
+  },
+);

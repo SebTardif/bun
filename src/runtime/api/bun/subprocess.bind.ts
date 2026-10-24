@@ -51,4 +51,10 @@ export const injectStdioReadError = b.fn({
 });
 export const closeStdinWriter = b.fn({ args: { subprocess: Subprocess }, returns: b.bool, capability: "js" });
 
-export const setStdioBlocking = b.fn({ args: { fd: b.any, blocking: b.any }, returns: b.any, capability: "js", throws: true, rustPath: "crate::api::bun::subprocess::set_stdio_blocking" });
+export const setStdioBlocking = b.fn({
+  args: { fd: b.any, blocking: b.any },
+  returns: b.any,
+  capability: "js",
+  throws: true,
+  rustPath: "crate::api::bun::subprocess::set_stdio_blocking",
+});

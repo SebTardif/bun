@@ -912,9 +912,7 @@ export const fileSinkInternals = {
     const { kWriteStreamFastPath } = require("internal/fs/streams");
     return (fd === 1 ? process.stdout : process.stderr)[kWriteStreamFastPath];
   },
-  expectStdioTeardown: $bindgen("FileSink.bind.ts", "expectStdioTeardown") as (
-    sink: Bun.FileSink,
-  ) => void,
+  expectStdioTeardown: $bindgen("FileSink.bind.ts", "expectStdioTeardown") as (sink: Bun.FileSink) => void,
 };
 
 export const byteStreamInternals = {

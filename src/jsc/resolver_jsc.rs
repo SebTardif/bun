@@ -9,9 +9,20 @@ use bun_core::{String as BunString, strings};
 use bun_paths::resolve_path;
 use bun_paths::{Platform, SEP, SEP_STR};
 
+struct NodeModulePathOptions {
+    use_dirname: bool,
+    split_query: bool,
+}
+
 pub(crate) fn node_module_paths(path: &BunString) -> Vec<BunString> {
     crate::mark_binding!();
-    node_module_paths_list(path, false, false)
+    node_module_paths_list(
+        path,
+        NodeModulePathOptions {
+            use_dirname: false,
+            split_query: false,
+        },
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -51,21 +62,23 @@ extern "C" fn node_module_paths_js_value(
 ) -> JSValue {
     crate::bun_string_jsc::to_js_array(
         global,
-        &node_module_paths_list(in_str, use_dirname, split_query),
+        &node_module_paths_list(
+            in_str,
+            NodeModulePathOptions {
+                use_dirname,
+                split_query,
+            },
+        ),
     )
     .or_pending_exception()
 }
 
-fn node_module_paths_list(
-    in_str: &BunString,
-    use_dirname: bool,
-    split_query: bool,
-) -> Vec<BunString> {
+fn node_module_paths_list(in_str: &BunString, options: NodeModulePathOptions) -> Vec<BunString> {
     let mut list: Vec<bun_core::String> = Vec::new();
 
     let utf8 = in_str.to_utf8();
-    let base_path: &[u8] = if use_dirname {
-        resolve_path::dirname::<bun_paths::platform::Auto>(if split_query {
+    let base_path: &[u8] = if options.use_dirname {
+        resolve_path::dirname::<bun_paths::platform::Auto>(if options.split_query {
             module_key_without_query(utf8.slice())
         } else {
             utf8.slice()
