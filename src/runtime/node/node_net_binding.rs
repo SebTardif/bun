@@ -10,7 +10,9 @@ use bun_jsc::{self as jsc, JSGlobalObject, JSValue, JsCell, JsResult};
 use bun_uws as uws;
 
 use crate::generated_bindgen::socket_body::SocketHandle;
-use crate::socket::{Listener, NativeCallbacks, NewSocket, SocketFlags, TCPSocket};
+#[cfg(unix)]
+use crate::socket::TCPSocket;
+use crate::socket::{Listener, NativeCallbacks, NewSocket, SocketFlags};
 
 static AUTO_SELECT_FAMILY_DEFAULT: AtomicBool = AtomicBool::new(true);
 
