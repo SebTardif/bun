@@ -5065,22 +5065,37 @@ it("applies backpressure to a ReadableStream response while the client drains", 
             if (sent === chunkCount) controller.close();
           },
         }),
+        { headers: { "Content-Length": String(chunk.byteLength * chunkCount) } },
       );
     },
   });
 
-  const response = await fetch(server.url);
-  const reader = response.body!.getReader();
+  // fetch can read ahead of its body consumer; a TCP reader applies backpressure at the transport.
+  const socket = connect(server.port!, "127.0.0.1");
+  socket.write("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
   let received = 0;
   let sentAtPartialDrain = -1;
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    received += value.byteLength;
-    if (sentAtPartialDrain < 0 && received >= chunk.byteLength * 4) {
-      // Client has consumed 1 MB of 16 MB. Sample the producer's progress.
-      sentAtPartialDrain = sent;
+  let header = Buffer.alloc(0);
+  let bodyStarted = false;
+  try {
+    for await (const data of socket) {
+      let body = data;
+      if (!bodyStarted) {
+        header = Buffer.concat([header, data]);
+        const end = header.indexOf("\r\n\r\n");
+        if (end < 0) continue;
+        expect(header.subarray(0, end).toString()).toStartWith("HTTP/1.1 200 OK\r\n");
+        body = header.subarray(end + 4);
+        bodyStarted = true;
+      }
+      received += body.byteLength;
+      if (sentAtPartialDrain < 0 && received >= chunk.byteLength * 4) {
+        // Client has consumed 1 MB of 16 MB. Sample the producer's progress.
+        sentAtPartialDrain = sent;
+      }
     }
+  } finally {
+    socket.destroy();
   }
 
   expect(received).toBe(chunk.byteLength * chunkCount);
