@@ -86,6 +86,7 @@
 #include <wtf/MainThread.h>
 #include <wtf/RunLoop.h>
 #include <wtf/Vector.h>
+#include <wtf/text/StringHash.h>
 #include <wtf/threads/BinarySemaphore.h>
 
 #include "ZigGlobalObject.h"
@@ -1645,8 +1646,12 @@ private:
 
     void write(const Identifier& ident)
     {
-        const String& str = ident.string();
-        StringConstantPool::AddResult addResult = m_constantPool.add(ident.impl(), m_constantPool.size());
+        writeString(ident.string());
+    }
+
+    void writeString(const String& str)
+    {
+        StringConstantPool::AddResult addResult = m_constantPool.add(str, m_constantPool.size());
         if (!addResult.isNewEntry) {
             write(StringPoolTag);
             writeStringIndex(addResult.iterator->value);
@@ -1682,8 +1687,11 @@ private:
 
     void write(const String& str)
     {
+        // Stored and cross-process bytes retain the canonical atom's string encoding.
         if (str.isNull())
             write(m_emptyIdentifier);
+        else if (m_context == SerializationContext::WorkerPostMessage && m_forStorage == SerializationForStorage::No && m_forTransfer == SerializationForCrossProcessTransfer::No)
+            writeString(str);
         else
             write(Identifier::fromString(m_lexicalGlobalObject->vm(), str));
     }
@@ -1693,7 +1701,7 @@ private:
         bool isNull = str.isNull();
         write(isNull);
         if (!isNull)
-            write(Identifier::fromString(m_lexicalGlobalObject->vm(), str));
+            write(str);
     }
 
     void write(const Vector<uint8_t>& vector)
@@ -1983,7 +1991,7 @@ private:
     ObjectPool m_objectPool;
     ObjectPool m_transferredMessagePorts;
     ObjectPool m_transferredArrayBuffers;
-    typedef HashMap<RefPtr<UniquedStringImpl>, uint32_t, IdentifierRepHash> StringConstantPool;
+    typedef HashMap<String, uint32_t> StringConstantPool;
     StringConstantPool m_constantPool;
     Identifier m_emptyIdentifier;
     SerializationContext m_context;
@@ -4671,10 +4679,25 @@ ExceptionOr<Ref<SerializedScriptValue>> SerializedScriptValue::create(JSGlobalOb
             // ArrayStorage / Undecided / holes forwarding → fall through to normal serialization path
         }
 
+        unsigned simplePropertyCount = 0;
+        if (canUseObjectFastPath) {
+            // Reject nested values before allocating cross-thread string copies.
+            structure->forEachProperty(vm, [&](const PropertyTableEntry& entry) -> bool {
+                JSValue propertyValue = object->getDirect(entry.offset());
+                if (propertyValue.isCell() && !propertyValue.isString()) {
+                    canUseObjectFastPath = false;
+                    return false;
+                }
+                ++simplePropertyCount;
+                return true;
+            });
+        }
+
         if (canUseObjectFastPath) {
             ASSERT(object != nullptr);
 
             WTF::Vector<SimpleInMemoryPropertyTableEntry> properties;
+            properties.reserveInitialCapacity(simplePropertyCount);
 
             structure->forEachProperty(vm, [&](const PropertyTableEntry& entry) -> bool {
                 // Only enumerable, data properties
