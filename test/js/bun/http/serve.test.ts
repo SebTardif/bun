@@ -31,7 +31,7 @@ import { join, resolve } from "path";
 import { heapStats } from "bun:jsc";
 import { spawn } from "child_process";
 import { on, once } from "node:events";
-import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer, get as httpGet, type IncomingMessage } from "node:http";
 import net, { type AddressInfo } from "node:net";
 import { networkInterfaces } from "node:os";
 import { Duplex } from "node:stream";
@@ -5065,37 +5065,26 @@ it("applies backpressure to a ReadableStream response while the client drains", 
             if (sent === chunkCount) controller.close();
           },
         }),
-        { headers: { "Content-Length": String(chunk.byteLength * chunkCount) } },
       );
     },
   });
 
-  // fetch can read ahead of its body consumer; a TCP reader applies backpressure at the transport.
-  const socket = connect(server.port!, "127.0.0.1");
-  socket.write("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+  // Unlike fetch read-ahead, the HTTP parser pauses the socket when this reader backs up.
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
+    httpGet(server.url, { agent: false }, resolve).on("error", reject);
+  });
   let received = 0;
   let sentAtPartialDrain = -1;
-  let header = Buffer.alloc(0);
-  let bodyStarted = false;
   try {
-    for await (const data of socket) {
-      let body = data;
-      if (!bodyStarted) {
-        header = Buffer.concat([header, data]);
-        const end = header.indexOf("\r\n\r\n");
-        if (end < 0) continue;
-        expect(header.subarray(0, end).toString()).toStartWith("HTTP/1.1 200 OK\r\n");
-        body = header.subarray(end + 4);
-        bodyStarted = true;
-      }
-      received += body.byteLength;
+    for await (const value of response) {
+      received += value.byteLength;
       if (sentAtPartialDrain < 0 && received >= chunk.byteLength * 4) {
         // Client has consumed 1 MB of 16 MB. Sample the producer's progress.
         sentAtPartialDrain = sent;
       }
     }
   } finally {
-    socket.destroy();
+    response.destroy();
   }
 
   expect(received).toBe(chunk.byteLength * chunkCount);
