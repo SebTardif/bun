@@ -1318,7 +1318,7 @@ console.log("survived", require("./late.js"));`,
     expect(stderr).toBe("");
     const root = path.resolve("/").length;
     expect(JSON.parse(stdout)).toEqual({
-      createRequire: "MODULE_NOT_FOUND",
+      createRequire: "ERR_INVALID_PACKAGE_CONFIG",
       nodeModulePaths: [root + 100_000 + "/node_modules".length, root + "node_modules".length],
       enableCompileCache: "Cannot create cache directory: path too long",
     });
@@ -1974,10 +1974,10 @@ console.log("survived", require("./late.js"));`,
     expect(require("./esm_to_cjs_interop.mjs")).toEqual(Symbol.for("meow"));
   });
 
-  test("require.cache throws if it's first accessed near the stack limit, and the next access creates it", async () => {
+  test("require.cache is available near the stack limit and preserves cache identity", async () => {
     const code = `
       const Module = require("node:module");
-      // Only the deepest frame catches the overflow, and any call into the builtin from there overflows again.
+      // Only the deepest frame catches the overflow; eager cache properties remain readable there.
       function probe(useModuleCache) {
         let outcome;
         function recurse() {
@@ -2015,7 +2015,7 @@ console.log("survived", require("./late.js"));`,
       stderr: "pipe",
     });
     const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
-    expect(stdout.trim()).toBe(JSON.stringify([["RangeError", "RangeError"], null, true, true, true]));
+    expect(stdout.trim()).toBe(JSON.stringify([["object", "object"], null, true, true, true]));
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
   });

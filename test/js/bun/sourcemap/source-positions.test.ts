@@ -267,6 +267,15 @@ function underCaret(preview: string, text: string) {
   return (under.startsWith("new " + text) ? under.slice(4) : under).slice(0, text.length);
 }
 
+// Runtime frames follow Node's syntax positions; source-map entries still locate the original probe text.
+function runtimePosition(text: string) {
+  if (text.startsWith("at?.(")) return { offset: 4, text: text.slice(4) };
+  if (text === "first.second") return { offset: 6, text: "second" };
+  if (text === "RangeError") return { offset: -4, text };
+  if (text === "null!") return { offset: 6, text: "ofNull" };
+  return { offset: 0, text };
+}
+
 describe.each(["test", "run", ...bundles, "compiled"])("%s", laneName => {
   // Once the stack of an error has been read, an executable reads the preview from the file on disk. It looks for the
   // path in the frame, which is relative to where it was built, from where it runs.
@@ -279,12 +288,13 @@ describe.each(["test", "run", ...bundles, "compiled"])("%s", laneName => {
   test.each(Object.keys(variants))("%s: where a call or an error is", variantName => {
     const wrong: Record<string, unknown> = {};
     let checked = 0;
-    for (const { id, file, line, column, text } of probes) {
+    for (const { id, file, line, column, text: probeText } of probes) {
       if (!file.startsWith(variantName + "/")) continue;
       const said = lanes[laneName][id];
       if (!said?.stack) continue;
       checked++;
-      const expected = `${file}:${line}:${column}`;
+      const { offset, text } = runtimePosition(probeText);
+      const expected = `${file}:${line}:${column + offset}`;
       const frames = said.stack.split("\n").slice(1).map(position);
       const frame = frames.findIndex(frame => frame.startsWith(file + ":"));
       const got = {

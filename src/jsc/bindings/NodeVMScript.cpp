@@ -175,6 +175,7 @@ constructScript(JSGlobalObject* globalObject, CallFrame* callFrame, JSValue newT
 
     // Like Node, reject an empty cachedData.
     if (script->options().cachedDataProvided) {
+        bool regenerateEmptyCache = cachedData.isEmpty() && script->options().produceCachedData;
         // Only record whether the bytecode decodes. Each run links the block compiled from source (unlinkedCodeBlockFor).
         bool accepted = false;
         if (RefPtr<JSC::CachedBytecode> cachedBytecode = unwrapCachedData(cachedData.span())) {
@@ -184,6 +185,8 @@ constructScript(JSGlobalObject* globalObject, CallFrame* callFrame, JSValue newT
         }
         script->cachedDataRejected(accepted ? TriState::False : TriState::True);
         cachedData = {};
+        if (regenerateEmptyCache)
+            script->cacheBytecode();
     } else if (script->options().produceCachedData)
         script->cacheBytecode();
 

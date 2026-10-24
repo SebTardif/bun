@@ -2756,8 +2756,7 @@ describe("env: SHARE_ENV shares the spawning thread's env, not a process-wide on
     });
   });
 
-  // A partial descriptor moves the entry from the shared store onto the JS object.
-  it("keeps an array-index env var readable after a partial defineProperty on the shared map", async () => {
+  it("rejects partial descriptors and keeps an array-index env var readable on the shared map", async () => {
     await using proc = Bun.spawn({
       cmd: [
         bunExe(),
@@ -2765,8 +2764,19 @@ describe("env: SHARE_ENV shares the spawning thread's env, not a process-wide on
         `const { Worker, SHARE_ENV } = require("worker_threads");
          new Worker("1", { eval: true, env: SHARE_ENV }).on("exit", () => {
            process.env[0] = "zero";
-           Object.defineProperty(process.env, "0", { enumerable: true });
+           let partialError;
+           try {
+             Object.defineProperty(process.env, "0", { enumerable: true });
+           } catch (error) {
+             partialError = error.code;
+           }
+           const afterRejected = process.env[0];
+           Object.defineProperty(process.env, "0", {
+             value: "updated", writable: true, enumerable: true, configurable: true,
+           });
            console.log(JSON.stringify({
+             partialError,
+             afterRejected,
              byIndex: process.env[0],
              byString: process.env["0"],
              listed: Object.keys(process.env).includes("0"),
@@ -2780,10 +2790,12 @@ describe("env: SHARE_ENV shares the spawning thread's env, not a process-wide on
     const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
     expect({ parsed: stdout ? JSON.parse(stdout) : stdout, stderr, exitCode }).toEqual({
       parsed: {
-        byIndex: "zero",
-        byString: "zero",
+        partialError: "ERR_INVALID_OBJECT_DEFINE_PROPERTY",
+        afterRejected: "zero",
+        byIndex: "updated",
+        byString: "updated",
         listed: true,
-        descriptor: { value: "zero", writable: true, enumerable: true, configurable: true },
+        descriptor: { value: "updated", writable: true, enumerable: true, configurable: true },
       },
       stderr: "",
       exitCode: 0,
