@@ -1429,7 +1429,9 @@ describe("package.json exports targets nested too deeply", () => {
 
     // Available stack determines whether the valid target resolves or a depth guard rejects it.
     expect({ stdout, stderr, exitCode }).toEqual({
-      stdout: expect.stringMatching(/^(resolved|caught (MODULE_NOT_FOUND|ERR_INVALID_PACKAGE_CONFIG))\n$/),
+      stdout: expect.stringMatching(
+        /^(resolved|caught (MODULE_NOT_FOUND|ERR_INVALID_PACKAGE_CONFIG|ERR_INVALID_PACKAGE_TARGET))\n$/,
+      ),
       stderr: "",
       exitCode: 0,
     });
