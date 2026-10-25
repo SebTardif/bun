@@ -20,6 +20,7 @@
 #include "JavaScriptCore/JSType.h"
 #include "JavaScriptCore/NumberObject.h"
 #include "JavaScriptCore/JSCJSValue.h"
+#include "JavaScriptCore/EnsureStillAliveHere.h"
 #include "JavaScriptCore/JSGlobalObject.h"
 #include "JavaScriptCore/JSPromiseConstructor.h"
 #include "JavaScriptCore/DeleteAllCodeEffort.h"
@@ -110,6 +111,7 @@
 #include "wtf/Assertions.h"
 #include "wtf/Compiler.h"
 #include "wtf/StackCheck.h"
+#include "wtf/StdLibExtras.h"
 #include "wtf/text/ExternalStringImpl.h"
 #include "wtf/text/OrdinalNumber.h"
 #include "wtf/text/StringCommon.h"
@@ -3114,9 +3116,13 @@ void JSC__JSGlobalObject__deleteModuleRegistryEntry(JSC::JSGlobalObject* global,
     global->moduleLoader()->removeEntry(identifier); // takes the loader's cellLock itself
 }
 
+static NEVER_INLINE SUPPRESS_ASAN void clearStackBelowCaller();
+
 void JSC__VM__collectAsync(JSC::VM* vm, bool full)
 {
     JSC::JSLockHolder lock(*vm);
+    // As in runGC, dead native stack slots must not retain cells in the requested collection.
+    clearStackBelowCaller();
     if (full)
         vm->heap.collectAsync(JSC::CollectionScope::Full);
     else
@@ -3145,6 +3151,7 @@ void JSC__VM__collectAsyncIdle(JSC::VM* vm)
     }
     request.didFinishEndPhase = clientData->idleCollectionDidFinish;
     clientData->idleCollectionsPending.fetch_add(1);
+    clearStackBelowCaller();
     vm->heap.collectAsync(request);
 }
 
@@ -4950,15 +4957,15 @@ void JSC__VM__completeAllJITPlans(JSC::VM* vm)
     vm->heap.completeAllJITPlans();
 }
 
-// A mitigation, not an exact fix: zeroes a fixed amount of dead stack between the heap iteration and the collection in
-// JSC__VM__runGC. Zeroing dead stack cannot free anything live; the worst it can do is not help.
+// A mitigation, not an exact fix: zeroes a fixed amount of dead stack before an asynchronous request or between the heap
+// iteration and collection in JSC__VM__runGC. Zeroing dead stack cannot free anything live; the worst it can do is not help.
 //
 // What it is for: deleteAllUnlinkedCodeBlocks() stops the allocators to iterate the heap, and prologues under
 // MarkedBlock::Handle::stopAllocating() spill a register holding a free list's sentinel (the address of the first cell
 // allocated from its last interval, plus 1). The collector's frames are then built over those words without writing
 // every slot, and the conservative scan covers those frames, so that one cell, dead or not, survives the collection.
 // Nothing leaks (the next collection frees it), but a test that expects Bun.gc(true) to collect an object it just
-// dropped fails: node-sqlite.test.ts did on x64 ASAN. It has not been seen in a release build.
+// dropped fails: node-sqlite.test.ts did on x64 ASAN. Asynchronous worker finalization also needs this in release builds.
 //
 // The sizes: only the stack between JSC__VM__runGC and callWithCurrentThreadState(), where the collector captures the
 // stack, is scanned. Measured on x64, that is 0.6 KB in a release build and 1.8 KB under ASAN; the sizes below are a
@@ -4972,9 +4979,10 @@ static NEVER_INLINE SUPPRESS_ASAN void clearStackBelowCaller()
 #else
     constexpr size_t size = 2 * 1024;
 #endif
-    volatile char dead[size];
-    for (size_t i = 0; i < size; ++i)
-        dead[i] = 0;
+    char dead[size];
+    WTF::secureZeroBytes(dead);
+    // A memory clobber alone can discard writes to an unescaped local buffer.
+    JSC::ensureStillAliveHere(dead);
 }
 
 size_t JSC__VM__runGC(JSC::VM* vm, bool sync)
