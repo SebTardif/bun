@@ -305,6 +305,7 @@ impl InitCommand {
     }
 
     pub(crate) fn exec(init_args: &[&ZStr]) -> Result<(), Error> {
+        let mut ca_options = Global::CAOptions::from_node_options();
         // --minimal is a special preset to create only empty package.json + tsconfig.json
         let mut minimal = false;
         let mut auto_yes = false;
@@ -313,11 +314,15 @@ impl InitCommand {
 
         let mut template: Template = Template::Blank;
         let mut prev_flag_was_react = false;
-        let mut ca_store_flags: Vec<&[u8]> = Vec::new();
         for arg_ in init_args {
             let arg = arg_.as_bytes();
             if parse_flags && !arg.is_empty() && arg[0] == b'-' {
-                if arg == b"--help" || arg == b"-h" {
+                if arg
+                    .strip_prefix(b"--")
+                    .is_some_and(|name| ca_options.read_flag(name))
+                {
+                    prev_flag_was_react = false;
+                } else if arg == b"--help" || arg == b"-h" {
                     CLI::command::tag_print_help(CLI::Command::Tag::InitCommand, true);
                     Global::exit(0);
                 } else if arg == b"-m" || arg == b"--minimal" {
@@ -352,9 +357,6 @@ impl InitCommand {
                     prev_flag_was_react = false;
                     auto_yes = true;
                 } else {
-                    if Global::is_ca_store_flag(arg) {
-                        ca_store_flags.push(arg);
-                    }
                     prev_flag_was_react = false;
                 }
             } else {
@@ -366,7 +368,7 @@ impl InitCommand {
             }
         }
 
-        Global::set_ca_store_from_flags(|flag| ca_store_flags.contains(&flag));
+        Global::set_ca_store_from_options(ca_options);
 
         // The template picker reads single keystrokes from raw-mode stdin; on a
         // pipe (CI, `spawn(...,{stdio:'pipe'})`, `foo | bun init`) that blocks
@@ -961,7 +963,7 @@ impl InitCommand {
 
 fn bun_install_argv() -> Result<Vec<&'static [u8]>, Error> {
     let mut argv: Vec<&[u8]> = vec![bun::self_exe_path()?.as_bytes(), b"install"];
-    argv.extend(Global::ca_store_flag().map(ZStr::as_bytes));
+    argv.extend(Global::ca_store_flags().map(ZStr::as_bytes));
     Ok(argv)
 }
 

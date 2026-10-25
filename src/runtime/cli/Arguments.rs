@@ -93,12 +93,14 @@ const BASE_PARAMS_: &[ParamType] = concat_params!(
             "--use-system-ca                   Use the system's trusted certificate authorities"
         ),
         parse_param!(
-            "--use-openssl-ca                  Use OpenSSL's default CA store instead of the bundled one"
-        ),
-        parse_param!("--use-bundled-ca                  Use bundled CA store"),
-        parse_param!(
             "--no-use-system-ca                Do not use system CAs, overriding $NODE_USE_SYSTEM_CA"
         ),
+        parse_param!(
+            "--use-openssl-ca                  Use OpenSSL's default CA store instead of the bundled one"
+        ),
+        parse_param!("--no-use-openssl-ca               Do not select OpenSSL's default CA store"),
+        parse_param!("--use-bundled-ca                  Use bundled CA store"),
+        parse_param!("--no-use-bundled-ca               Do not select the bundled CA store"),
         parse_param!("-h, --help                        Display this menu and exit"),
     ],
     &[parse_param!("<POS>...")],
@@ -938,12 +940,19 @@ pub(crate) fn parse(cmd: CommandTag, ctx: Context<'_>) -> crate::Result<api::Tra
 
     let mut diag = clap::Diagnostic::default();
     let table = tag_table(cmd);
+    let mut ca_options = Global::CAOptions::default();
+    let mut on_option = |names: clap::Names, value: Option<&[u8]>| {
+        apply_heap_limit_option(names, value);
+        if let Some(name) = names.long {
+            ca_options.read_flag(name);
+        }
+    };
 
     let args = match clap::parse_with_table::<clap::Help>(
         table,
         clap::ParseOptions {
             diagnostic: Some(&mut diag),
-            on_option: Some(apply_heap_limit_option),
+            on_option: Some(&mut on_option),
             stop_after_positional_at: match cmd {
                 CommandTag::RunCommand => 2,
                 CommandTag::AutoCommand | CommandTag::RunAsNodeCommand => 1,
@@ -1180,7 +1189,7 @@ pub(crate) fn parse(cmd: CommandTag, ctx: Context<'_>) -> crate::Result<api::Tra
         }
     }
 
-    Global::set_ca_store_from_flags(|flag| args.flag(flag));
+    Global::set_ca_store_from_options(ca_options);
 
     // runtime commands
     if matches!(

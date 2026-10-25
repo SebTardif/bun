@@ -1368,11 +1368,18 @@ pub(crate) mod command {
     #[cold]
     #[inline(never)]
     fn exec_init() -> CmdResult {
-        // InitCommand parses its own argv (no Context). Skip past argv[0],
-        // the NODE_OPTIONS-injected window, and the "init" keyword.
         let argv = argv_zslice();
-        let start = 2 + bun::node_options_argc();
-        super::init_command::InitCommand::exec(&argv[start.min(argv.len())..])
+        let start = 1 + bun::node_options_argc();
+        let args = &argv[start.min(argv.len())..];
+        let command_index = args
+            .iter()
+            .position(|arg| arg.as_bytes() == b"init")
+            .unwrap();
+        // Keep options before `init` in the same ordered parse as those after it.
+        let mut init_args = Vec::with_capacity(args.len() - 1);
+        init_args.extend_from_slice(&args[..command_index]);
+        init_args.extend_from_slice(&args[command_index + 1..]);
+        super::init_command::InitCommand::exec(&init_args)
     }
 
     #[cold]
@@ -1741,6 +1748,7 @@ pub(crate) mod command {
         let mut positional_i: usize = 0;
         let mut dash_dash_bun = false;
         let mut print_help = false;
+        let mut ca_options = Global::CAOptions::default();
 
         if args.len() > 2 {
             let remainder = &args[1..];
@@ -1756,6 +1764,9 @@ pub(crate) mod command {
                         positional_i += 1;
                     }
                     if slice[0] == b'-' {
+                        if let Some(name) = slice.strip_prefix(b"--") {
+                            ca_options.read_flag(name);
+                        }
                         if slice == b"--bun" {
                             dash_dash_bun = true;
                         } else if slice == b"--help" || slice == b"-h" {
@@ -1820,13 +1831,14 @@ To create a project with the official Next.js scaffolding tool, run
             && example_tag != ExampleTag::LocalFolder;
 
         if use_bunx {
+            Global::set_ca_store_from_options(ca_options);
             let mut bunx_args: Vec<&ZStr> =
                 Vec::with_capacity(3 + args.len() - template_name_start + (dash_dash_bun as usize));
             bunx_args.push(bun_core::zstr!("bunx"));
             if dash_dash_bun {
                 bunx_args.push(bun_core::zstr!("--bun"));
             }
-            bunx_args.extend(Global::ca_store_flag());
+            bunx_args.extend(Global::ca_store_flags());
             // `add_create_prefix` returns an owned NUL-terminated buffer.
             // `bun create` is a one-shot CLI subcommand (ends in exec/exit), so
             // the prefixed package name is a process singleton — park the owning

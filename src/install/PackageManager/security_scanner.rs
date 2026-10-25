@@ -881,7 +881,7 @@ impl<'a> SecurityScanSubprocess<'a> {
         let code =
             std::ffi::CString::new(&*self.code).map_err(|_| crate::Error::InvalidCharacter)?;
         let mut argv = vec![exec_path.as_cstr(), c"--no-install", c"--no-env-file"];
-        argv.extend(bun_core::Global::ca_store_flag().map(bun_core::ZStr::as_cstr));
+        argv.extend(bun_core::Global::ca_store_flags().map(bun_core::ZStr::as_cstr));
         argv.extend([c"-e", code.as_c_str()]);
         let env = self.manager.env_mut();
         // Set in the process environment after the loader copied it.

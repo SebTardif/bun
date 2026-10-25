@@ -389,7 +389,7 @@ fn build_worker_argv(ctx: &Command::ContextData) -> crate::Result<Box<[bun_spawn
             argv.push(lit(b"--disallow-code-generation-from-strings=strict\0"));
         }
     }
-    if let Some(flag) = bun_core::Global::ca_store_flag() {
+    for flag in bun_core::Global::ca_store_flags() {
         argv.push(flag.as_ptr().cast());
     }
     if matches!(ctx.debug.macros, MacroOptions::Disable) {

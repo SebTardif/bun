@@ -156,6 +156,12 @@ describe("--use-system-ca", () => {
     [["--no-use-system-ca"], "rejected:DEPTH_ZERO_SELF_SIGNED_CERT"],
     [["--use-openssl-ca"], "rejected:DEPTH_ZERO_SELF_SIGNED_CERT"],
     [["--use-system-ca"], isLinux ? "trusted" : "rejected:DEPTH_ZERO_SELF_SIGNED_CERT"],
+    [["--no-use-system-ca", "--use-system-ca"], isLinux ? "trusted" : "rejected:DEPTH_ZERO_SELF_SIGNED_CERT"],
+    [["--use-system-ca", "--no-use-system-ca"], "rejected:DEPTH_ZERO_SELF_SIGNED_CERT"],
+    [
+      ["--use-openssl-ca", "--no-use-openssl-ca", "--use-system-ca"],
+      isLinux ? "trusted" : "rejected:DEPTH_ZERO_SELF_SIGNED_CERT",
+    ],
   ])("a CA only the system store sees, with flags %j -> %s", async (flags, expected) => {
     using dir = tempDir("use-system-ca-only", {
       "cert.pem": tls.cert,
@@ -882,7 +888,17 @@ describe.concurrent("--use-openssl-ca", () => {
     [["x", flag, "no-deps"], "no-deps", untrusted],
     [["create", flag, "no-deps"], "create-no-deps", untrusted],
     [["create", "local-template", "destination", flag], "no-deps", untrusted],
+    [["create", flag, "no-deps", "--no-use-openssl-ca"], "create-no-deps", untrusted],
+    [["create", "--use-system-ca", flag, "local-template", "destination", "--no-use-system-ca"], "no-deps", untrusted],
+    [
+      ["create", "local-template", "destination", flag, "--no-use-openssl-ca"],
+      "no-deps",
+      "ERR_TLS_CERT_ALTNAME_INVALID",
+    ],
     [["init", "-y", flag], "@types/bun", untrusted],
+    [["init", "app", flag, "--yes"], "@types/bun", untrusted],
+    [["init", "app", "--use-system-ca", flag, "--no-use-system-ca", "--yes"], "@types/bun", untrusted],
+    [["init", "app", flag, "--no-use-openssl-ca", "--yes"], "@types/bun", "ERR_TLS_CERT_ALTNAME_INVALID"],
     [["init", "--react", flag, "react-app"], "react", untrusted],
   ])("bun %j: the manifest of %s from a registry with a bundled root fails with %s", manifestFails);
 
