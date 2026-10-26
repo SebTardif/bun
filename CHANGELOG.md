@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Withhold macOS signing and notarization credentials from release dry runs while retaining both Darwin archives for qualification.
+
+- Keep CI build and test diagnostics from dumping environment values or machine identity details.
+
 - Publish `node:sqlite` query diagnostics with expanded SQL, database identity and duration, including safe synchronous nested queries; support statement close/disposal and the current constructor aliases.
 
 - Copy large ArrayBuffers directly into receiver-owned contents for Worker and MessagePort messages, preserving source buffers and stored serialization bytes.
